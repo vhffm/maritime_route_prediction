@@ -3,6 +3,7 @@ import geopandas as gpd
 import movingpandas as mpd
 import numpy as np
 from datetime import timedelta, datetime
+import time
 import folium
 import warnings
 import sys
@@ -31,9 +32,12 @@ class MaritimeTrafficNetwork:
         '''
         #
         print(f'Calculating significant turning points with Douglas Peucker algorithm (tolerance = {tolerance}) ...')
+        start = time.time()  # start timer
         self.significant_points_trajectory = mpd.DouglasPeuckerGeneralizer(self.trajectories).generalize(tolerance=tolerance)
         n_points, n_DP_points = len(self.gdf), len(self.significant_points_trajectory.to_point_gdf())
+        end = time.time()  # end timer
         print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
+        print(f'Time elapsed: {(end-start)/60:.2f} minutes')
 
     def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, eps=0.008):
         '''
@@ -42,6 +46,7 @@ class MaritimeTrafficNetwork:
         :param min_points: required parameter for DBSCAN and HDBSCAN
         :param eps: required parameter for DBSCAN
         '''
+        start = time.time()  # start timer
         # convert trajectorties to point GeoDataFrame
         significant_points = self.significant_points_trajectory.to_point_gdf()
         # import clustering modules
@@ -78,7 +83,9 @@ class MaritimeTrafficNetwork:
             hull = significant_points[significant_points.clusterID == i].unary_union.convex_hull
             cluster_centroids['convex_hull'].iloc[i] = hull
         print(f'{len(cluster_centroids)} clusters detected')
-
+        end = time.time()  # end timer
+        print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+        
         # assign results
         self.significant_points = significant_points
         self.waypoints = cluster_centroids

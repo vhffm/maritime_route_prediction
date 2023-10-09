@@ -25,10 +25,13 @@ class MaritimeTrafficNetwork:
 
     def calc_significant_points_DP(self, tolerance):
         '''
-        Detect significant turning points with Douglas Peucker algorithm
+        Detect significant turning points with Douglas Peucker algorithm 
+        and add COG before and after each significant point
         :param tolerance: Douglas Peucker algorithm tolerance
-        result: self.significant_points is set to a MovingPandas TrajectoryCollection containing
+        result: self.significant_points_trajectory is set to a MovingPandas TrajectoryCollection containing
                 the significant turning points
+                self.significant_points is set to GeoPandasDataframe containing the significant turning 
+                points and COG information
         '''
         #
         print(f'Calculating significant turning points with Douglas Peucker algorithm (tolerance = {tolerance}) ...')
@@ -39,6 +42,21 @@ class MaritimeTrafficNetwork:
         print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
 
+        print(f'Adding course over ground before and after each turn ...')
+        start = time.time()  # start timer
+        self.significant_points_trajectory.add_direction()
+        traj_df = self.significant_points_trajectory.to_point_gdf()
+        traj_df.rename(columns={'direction': 'cog_before'}, inplace=True)
+        traj_df['cog_after'] = np.nan
+        for mmsi in traj_df.mmsi.unique():
+            subset = traj_df[traj_df.mmsi == mmsi]
+            fill_value = subset['cog_before'].iloc[-1]
+            subset['cog_after'] = subset['cog_before'].shift(-1, fill_value=fill_value)
+            traj_df.update(subset)
+        self.significant_points = traj_df
+        end = time.time()  # end timer
+        print(f'Done. Time elapsed: {(end-start)/60:.2f} minutes')
+
     def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, eps=0.008):
         '''
         Compute waypoints by clustering significant turning points
@@ -47,13 +65,19 @@ class MaritimeTrafficNetwork:
         :param eps: required parameter for DBSCAN
         '''
         start = time.time()  # start timer
-        # convert trajectorties to point GeoDataFrame
-        significant_points = self.significant_points_trajectory.to_point_gdf()
+        significant_points = self.significant_points
+        
         # import clustering modules
         from sklearn.cluster import DBSCAN, HDBSCAN
+        ########
+        # DBSCAN
+        ########
         if method == 'DBSCAN':
             print(f'Calculating waypoints with {method} (eps = {eps}, min_samples = {min_samples}) ...')
             clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(significant_points[['lat', 'lon']])
+        #########
+        # HDBSCAN
+        #########
         elif method == 'HDBSCAN':
             print(f'Calculating waypoints with {method} (min_samples = {min_samples}) ...')
             clustering = HDBSCAN(min_samples=min_samples).fit(significant_points[['lat', 'lon']])
@@ -62,21 +86,26 @@ class MaritimeTrafficNetwork:
             return
         
         # compute cluster centroids
-        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'convex_hull'])
+        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'speed', 'convex_hull'])
         for i in range(0, max(clustering.labels_)+1):
             lat = significant_points[clustering.labels_ == i].lat.mean()
             lon = significant_points[clustering.labels_ == i].lon.mean()
-            centroid = pd.DataFrame([[i, lat, lon]], columns=['clusterID', 'lat', 'lon'])
+            speed = significant_points[clustering.labels_ == i].speed.mean()
+            centroid = pd.DataFrame([[i, lat, lon, speed]], columns=['clusterID', 'lat', 'lon', 'speed'])
             cluster_centroids = pd.concat([cluster_centroids, centroid])
         
         significant_points['clusterID'] = clustering.labels_  # assign clusterID to each waypoint
         
         # convert waypoint and cluster centroid DataFrames to GeoDataFrames
         significant_points = gpd.GeoDataFrame(significant_points, 
-                                              geometry=gpd.points_from_xy(significant_points.lon, significant_points.lat), crs="EPSG:4326")
+                                              geometry=gpd.points_from_xy(significant_points.lon,
+                                                                          significant_points.lat), 
+                                              crs="EPSG:4326")
         significant_points.reset_index(inplace=True)
         cluster_centroids = gpd.GeoDataFrame(cluster_centroids, 
-                                             geometry=gpd.points_from_xy(cluster_centroids.lon, cluster_centroids.lat), crs="EPSG:4326")
+                                             geometry=gpd.points_from_xy(cluster_centroids.lon,
+                                                                         cluster_centroids.lat),
+                                             crs="EPSG:4326")
         
         # compute convex hull of each cluster
         for i in range(0, max(clustering.labels_)+1):

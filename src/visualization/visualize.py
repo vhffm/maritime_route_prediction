@@ -40,7 +40,7 @@ def traffic_raster_overlay(df, map):
     fig.add_axes(ax)
 
     # make hexbin plot
-    plot = plt.hexbin(df.lon, df.lat, gridsize=4000, mincnt=3, cmap='flag')
+    plot = plt.hexbin(df.lon, df.lat, gridsize=6000, mincnt=2, cmap='flag')
     
     plt.gca().set_axis_off()
     plt.subplots_adjust(top = 1, bottom = 0, right = 1, left = 0, 
@@ -75,4 +75,11 @@ def traffic_raster_overlay(df, map):
         mercator_project=True
     ).add_to(map)
     
+    return map
+
+def map_accurate_and_simplified_trajectory(accurate, simplified, center=[59, 5], columns=['mmsi', 'geometry'], map=None):
+    if map is None:
+        map = folium.Map(location=center, tiles="OpenStreetMap", zoom_start=8)
+    map = accurate.to_traj_gdf()[columns].explore(m=map, color='blue', name='Accurate trajectory')
+    map = simplified.to_traj_gdf()[columns].explore(m=map, color='red', name='Douglas Peucker simplified trajectory')
     return map

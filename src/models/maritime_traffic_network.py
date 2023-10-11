@@ -230,7 +230,7 @@ class MaritimeTrafficNetwork:
         stops.set_geometry('convex_hull', inplace=True)
         map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
                                           style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
-        folium.LayerControl().add_to(map)
+        #folium.LayerControl().add_to(map)
 
         return map
 

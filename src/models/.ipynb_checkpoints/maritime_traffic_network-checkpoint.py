@@ -3,6 +3,7 @@ import geopandas as gpd
 import movingpandas as mpd
 import numpy as np
 from datetime import timedelta, datetime
+from sklearn.cluster import DBSCAN, HDBSCAN, OPTICS
 import time
 import folium
 import warnings
@@ -23,6 +24,16 @@ class MaritimeTrafficNetwork:
         print(f'AIS messages: {len(self.gdf)}')
         print(f'Trajectories: {len(self.trajectories)}')
 
+    def init_precomputed_significant_points(self, gdf):
+        '''
+        Load precomputed significant points
+        '''
+        print('Loading significant turning points from file...')
+        self.significant_points = gdf
+        self.significant_points_trajectory = mpd.TrajectoryCollection(gdf, traj_id_col='mmsi', obj_id_col='mmsi', t='date_time_utc')
+        n_points, n_DP_points = len(self.gdf), len(self.significant_points)
+        print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
+    
     def calc_significant_points_DP(self, tolerance):
         '''
         Detect significant turning points with Douglas Peucker algorithm 
@@ -50,14 +61,17 @@ class MaritimeTrafficNetwork:
         traj_df['cog_after'] = np.nan
         for mmsi in traj_df.mmsi.unique():
             subset = traj_df[traj_df.mmsi == mmsi]
-            fill_value = subset['cog_before'].iloc[-1]
-            subset['cog_after'] = subset['cog_before'].shift(-1, fill_value=fill_value)
+            if len(subset)>1:
+                fill_value = subset['cog_before'].iloc[-1]
+                subset['cog_after'] = subset['cog_before'].shift(-1, fill_value=fill_value)
+            else:
+                subset['cog_after'] = subset['cog_before']
             traj_df.update(subset)
         self.significant_points = traj_df
         end = time.time()  # end timer
         print(f'Done. Time elapsed: {(end-start)/60:.2f} minutes')
 
-    def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, eps=0.008, metric='euclidian'):
+    def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, eps=0.008, metric='euclidean'):
         '''
         Compute waypoints by clustering significant turning points
         :param method: Clustering method (supported: DBSCAN and HDBSCAN)
@@ -66,54 +80,59 @@ class MaritimeTrafficNetwork:
         '''
         start = time.time()  # start timer
         significant_points = self.significant_points
+
+        # prepare clustering depending on metric
+        if metric == 'euclidean':
+            columns = ['lat', 'lon']
+            metric_params = {}
+        elif metric == 'mahalanobis':
+            columns = ['lat', 'lon', 'cog_before', 'cog_after']
+            V = np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
+            metric_params = {'V':V}
+            metric_params_OPTICS = {'VI':np.linalg.inv(V)}
+        else:
+            print(f'{metric} is not a supported distance metric. Exiting waypoint calculation...')
+            return
         
-        # import clustering modules
-        from sklearn.cluster import DBSCAN, HDBSCAN
         ########
         # DBSCAN
         ########
         if method == 'DBSCAN':
             print(f'Calculating waypoints with {method} (eps = {eps}, min_samples = {min_samples}) ...')
-            if metric == 'euclidian':
-                print(f'Distance metric: {metric}')
-                clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(significant_points[['lat', 'lon']])
-            elif metric == 'mahalanobis':
-                print(f'Distance metric: {metric}')
-                V = np.diag([0.1, 0.1, 1e6, 1e6])  # mahalanobis distance parameter matrix
-                clustering = DBSCAN(eps=eps, min_samples=min_samples, 
-                                    metric=metric, metric_params={'V':V}).fit(significant_points[['lat', 'lon', 'cog_before', 'cog_after']])
-            else:
-                print(f'{metric} is not a supported distance metric. Exiting waypoint calculation...')
-                return
+            print(f'Distance metric: {metric}')
+            clustering = DBSCAN(eps=eps, min_samples=min_samples, 
+                                metric=metric, metric_params=metric_params).fit(significant_points[columns])   
         #########
         # HDBSCAN
         #########
         elif method == 'HDBSCAN':
             print(f'Calculating waypoints with {method} (min_samples = {min_samples}) ...')
-            if metric == 'euclidian':
-                print(f'Distance metric: {metric}')
-                clustering = HDBSCAN(min_samples=min_samples, cluster_selection_method='leaf').fit(significant_points[['lat', 'lon']])
-            elif metric == 'mahalanobis':
-                print(f'Distance metric: {metric}')
-                V = np.diag([0.1, 0.1, 1e6, 1e6])  # mahalanobis distance parameter matrix
-                clustering = HDBSCAN(min_samples=min_samples, cluster_selection_method='leaf',
-                                     metric=metric, metric_params={'V':V}).fit(significant_points[['lat', 'lon', 'cog_before', 'cog_after']])
-            else:
-                print(f'{metric} is not a supported distance metric. Exiting waypoint calculation...')
-                return     
+            print(f'Distance metric: {metric}')
+            clustering = HDBSCAN(min_cluster_size=min_samples, cluster_selection_method='leaf', metric=metric, 
+                                 metric_params=metric_params).fit(significant_points[columns])
+        #########
+        # OPTICS
+        #########
+        elif method == 'OPTICS':
+            print(f'Calculating waypoints with {method} (min_samples = {min_samples}) ...')
+            print(f'Distance metric: {metric}')
+            clustering = OPTICS(min_samples=min_samples, metric=metric, 
+                                metric_params=metric_params_OPTICS).fit(significant_points[columns])
         else:
             print(f'{method} is not a supported clustering method. Exiting waypoint calculation...')
             return
         
         # compute cluster centroids
-        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'speed', 'direction', 'convex_hull'])
+        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'speed', 'direction', 'n_members', 'convex_hull'])
         for i in range(0, max(clustering.labels_)+1):
             lat = significant_points[clustering.labels_ == i].lat.mean()
             lon = significant_points[clustering.labels_ == i].lon.mean()
             speed = significant_points[clustering.labels_ == i].speed.mean()
             direction = ((significant_points[clustering.labels_ == i].cog_before +
                         significant_points[clustering.labels_ == i].cog_after)/2).mean()
-            centroid = pd.DataFrame([[i, lat, lon, speed, direction]], columns=['clusterID', 'lat', 'lon', 'speed', 'direction'])
+            n_members = len(significant_points[clustering.labels_ == i])
+            centroid = pd.DataFrame([[i, lat, lon, speed, direction, n_members]], 
+                                    columns=['clusterID', 'lat', 'lon', 'speed', 'direction', 'n_members'])
             cluster_centroids = pd.concat([cluster_centroids, centroid])
         
         significant_points['clusterID'] = clustering.labels_  # assign clusterID to each waypoint

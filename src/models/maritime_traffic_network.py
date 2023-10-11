@@ -9,6 +9,13 @@ import folium
 import warnings
 import sys
 
+# add paths for modules
+sys.path.append('../visualization')
+print(sys.path)
+
+# import modules
+import visualize
+
 class MaritimeTrafficNetwork:
     '''
     DOCSTRING
@@ -33,6 +40,14 @@ class MaritimeTrafficNetwork:
         self.significant_points_trajectory = mpd.TrajectoryCollection(gdf, traj_id_col='mmsi', obj_id_col='mmsi', t='date_time_utc')
         n_points, n_DP_points = len(self.gdf), len(self.significant_points)
         print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
+
+    def init_precomputed_waypoints(self, gdf):
+        '''
+        Load precomputed waypoints
+        '''
+        print('Loading precomputed waypoints from file...')
+        self.waypoints = gdf
+        print(f'{len(gdf)} waypoints loaded')
     
     def calc_significant_points_DP(self, tolerance):
         '''
@@ -160,4 +175,62 @@ class MaritimeTrafficNetwork:
         # assign results
         self.significant_points = significant_points
         self.waypoints = cluster_centroids
+
+    def map_waypoints(self, detailed_plot=False, center=[59, 5]):
+        # plotting
+        detailed_plot = False
+        if detailed_plot:
+            columns = ['geometry', 'mmsi']  # columns to be plotted
+            # plot simplified trajectories
+            map = self.trajectories.to_traj_gdf()[columns].explore(column='mmsi', name='Simplified trajectories', 
+                                                                      style_kwds={'weight':1, 'color':'black', 'opacity':0.5}, 
+                                                                      legend=False)
+            # plot significant turning points with their cluster ID
+            map = self.significant_points[['clusterID', 'geometry']].explore(m=map, name='all waypoints with cluster ID', 
+                                                                                legend=False,
+                                                                                marker_kwds={'radius':2},
+                                                                                style_kwds={'opacity':0.2})
+        else:
+            # plot basemap
+            map = folium.Map(location=center, tiles="OpenStreetMap", zoom_start=8)
+            # plot traffic as raster overlay
+            map = visualize.traffic_raster_overlay(self.gdf, map)
+        
+        # plot cluster centroids and their convex hull
+        cluster_centroids = self.waypoints
+        columns_points = ['clusterID', 'geometry', 'speed', 'direction', 'n_members']  # columns to plot
+        columns_hull = ['clusterID', 'convex_hull', 'speed', 'direction', 'n_members']  # columns to plot
+        
+        # plot eastbound cluster centroids
+        eastbound = cluster_centroids[(cluster_centroids.direction < 180) & (cluster_centroids.speed >= 1.0)]
+        eastbound.set_geometry('geometry', inplace=True)
+        map = eastbound[columns_points].explore(m=map, name='cluster centroids (eastbound)', legend=False,
+                                                marker_kwds={'radius':3},
+                                                style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':1})
+        eastbound.set_geometry('convex_hull', inplace=True)
+        map = eastbound[columns_hull].explore(m=map, name='cluster convex hulls (eastbound)', legend=False,
+                                              style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2})
+        
+        # plot westbound cluster centroids
+        westbound = cluster_centroids[(cluster_centroids.direction >= 180) & (cluster_centroids.speed >= 1.0)]
+        westbound.set_geometry('geometry', inplace=True)
+        map = westbound[columns_points].explore(m=map, name='cluster centroids (westbound)', legend=False,
+                                                marker_kwds={'radius':3},
+                                                style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':1})
+        westbound.set_geometry('convex_hull', inplace=True)
+        map = westbound[columns_hull].explore(m=map, name='cluster convex hulls (westbound)', legend=False,
+                                              style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':0.2})
+        
+        # plot stop cluster centroids
+        stops = cluster_centroids[cluster_centroids.speed < 1.0]
+        stops.set_geometry('geometry', inplace=True)
+        map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,
+                                            marker_kwds={'radius':3},
+                                            style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':1})
+        stops.set_geometry('convex_hull', inplace=True)
+        map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
+                                          style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
+        folium.LayerControl().add_to(map)
+
+        return map
 

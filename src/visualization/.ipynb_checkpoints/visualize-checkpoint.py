@@ -80,6 +80,8 @@ def traffic_raster_overlay(df, map):
 def map_accurate_and_simplified_trajectory(accurate, simplified, center=[59, 5], columns=['mmsi', 'geometry'], map=None):
     if map is None:
         map = folium.Map(location=center, tiles="OpenStreetMap", zoom_start=8)
-    map = accurate.to_traj_gdf()[columns].explore(m=map, color='blue', name='Accurate trajectory')
-    map = simplified.to_traj_gdf()[columns].explore(m=map, color='red', name='Douglas Peucker simplified trajectory')
+    map = accurate.to_traj_gdf()[columns].explore(m=map, color='blue', name='Accurate trajectory', 
+                                                  style_kwds={'weight':1, 'color':'black', 'opacity':0.5})
+    map = simplified.to_traj_gdf()[columns].explore(m=map, color='red', name='Douglas Peucker simplified trajectory',
+                                                    style_kwds={'weight':1, 'color':'blue', 'opacity':0.5})
     return map

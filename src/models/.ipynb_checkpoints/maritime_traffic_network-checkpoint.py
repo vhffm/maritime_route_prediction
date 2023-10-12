@@ -81,7 +81,7 @@ class MaritimeTrafficNetwork:
                 subset['cog_after'] = subset['cog_before'].shift(-1, fill_value=fill_value)
             else:
                 subset['cog_after'] = subset['cog_before']
-            traj_df.update(subset)
+            traj_df.loc[traj_df.mmsi == mmsi, 'cog_after'] = subset['cog_after'].values 
         self.significant_points = traj_df
         end = time.time()  # end timer
         print(f'Done. Time elapsed: {(end-start)/60:.2f} minutes')
@@ -98,6 +98,9 @@ class MaritimeTrafficNetwork:
 
         # prepare clustering depending on metric
         if metric == 'euclidean':
+            columns = ['lat', 'lon']
+            metric_params = {}
+        elif metric == 'haversine':
             columns = ['lat', 'lon']
             metric_params = {}
         elif metric == 'mahalanobis':

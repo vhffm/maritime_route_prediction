@@ -2,8 +2,12 @@ import pandas as pd
 import geopandas as gpd
 import movingpandas as mpd
 import numpy as np
+import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 from sklearn.cluster import DBSCAN, HDBSCAN, OPTICS
+from scipy.sparse import coo_matrix
+from shapely.geometry import Point, LineString
+import networkx as nx
 import time
 import folium
 import warnings
@@ -11,10 +15,12 @@ import sys
 
 # add paths for modules
 sys.path.append('../visualization')
+sys.path.append('../features')
 print(sys.path)
 
 # import modules
 import visualize
+import geometry_utils
 
 class MaritimeTrafficNetwork:
     '''
@@ -26,6 +32,8 @@ class MaritimeTrafficNetwork:
         self.significant_points_trajectory = []
         self.significant_points = []
         self.waypoints = []
+        self.waypoint_connections = []
+        self.G = []
 
     def get_trajectories_info(self):
         print(f'AIS messages: {len(self.gdf)}')
@@ -179,6 +187,74 @@ class MaritimeTrafficNetwork:
         self.significant_points = significant_points
         self.waypoints = cluster_centroids
 
+    def make_graph_from_waypoints(self, min_passages=3):
+        '''
+        Transform computed waypoints to a weighted, directed graph
+        The nodes of the graph are self.waypoints
+        The edges are calculated by iterating through all trajectories. If a vessel passes through a pair of waypoints on its journey,
+        an edge between the two corresponding nodes is added. The weight of the edge is the number of passages along this edge.
+        '''     
+        start = time.time()  # start timer
+        # create graph adjacency matrix
+        n_clusters = len(self.waypoints)
+        coord_dict = {}
+        # for each trajectory, increase the weight of the adjacency matrix between two nodes
+        for mmsi in self.significant_points.mmsi.unique():
+            subset = self.significant_points[self.significant_points.mmsi == mmsi]
+            subset = subset[subset.clusterID >=0]  # remove outliers
+            if len(subset) > 1:  # subset needs to contain at least 2 waypoints
+                for i in range(0, len(subset)-1):
+                    row = subset.clusterID.iloc[i]
+                    col = subset.clusterID.iloc[i+1]
+                    if row != col:  # no self loops
+                        if (row, col) in coord_dict:
+                            coord_dict[(row, col)] += 1  # increase the edge weight for each passage
+                        else:
+                            coord_dict[(row, col)] = 1  # create edge if it does not exist yet
+        
+        # store adjacency matrix as sparse matrix in COO format
+        row_indices, col_indices = zip(*coord_dict.keys())
+        values = list(coord_dict.values())
+        A_raw = coo_matrix((values, (row_indices, col_indices)), shape=(n_clusters, n_clusters))
+        mask = A_raw.data >= min_passages
+        A = coo_matrix((A_raw.data[mask], (A_raw.row[mask], A_raw.col[mask])), shape=A_raw.shape)
+
+        # initialize directed graph from adjacency matrix
+        G = nx.from_scipy_sparse_array(A, create_using=nx.DiGraph)
+
+        # add node features
+        for i in range(0, len(self.waypoints)):
+            node_id = self.waypoints.clusterID.iloc[i]
+            G.nodes[node_id]['n_members'] = self.waypoints.n_members.iloc[i]
+            G.nodes[node_id]['position'] = (self.waypoints.lon.iloc[i], self.waypoints.lat.iloc[i])  # !changeg lat-lon to lon-lat for plotting
+            G.nodes[node_id]['speed'] = self.waypoints.speed.iloc[i]
+            G.nodes[node_id]['direction'] = self.waypoints.direction.iloc[i]
+
+        # report and save results
+        print(f'Created maritime traffic network graph from waypoints and trajectories')
+        print(f'Number of nodes: {G.number_of_nodes()}')
+        print(f'Number of edges: {G.number_of_edges()}')
+        self.G = G
+
+        # Construct a GeoDataFrame from graph edges that is plottable on a map
+        waypoints = self.waypoints
+        waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
+        for orig, dest, weight in zip(A.row, A.col, A.data):
+            # add linestring as edge
+            p1 = waypoints[waypoints.clusterID == orig].geometry
+            p2 = waypoints[waypoints.clusterID == dest].geometry
+            edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
+            # compute the orientation fo the edge (COG)
+            direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
+            line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
+                                columns=['from', 'to', 'geometry', 'direction', 'passages'])
+            waypoint_connections = pd.concat([waypoint_connections, line])
+        # save result
+        self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs="EPSG:4326")
+
+        end = time.time()  # end timer
+        print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+    
     def map_waypoints(self, detailed_plot=False, center=[59, 5]):
         # plotting
         detailed_plot = False
@@ -237,3 +313,53 @@ class MaritimeTrafficNetwork:
 
         return map
 
+    def map_graph(self):
+        '''
+        Visualization function to map the maritime traffic network graph
+        '''
+        # basemap with waypoints and traffic
+        map = self.map_waypoints()
+
+        # add connections
+        connections = self.waypoint_connections
+        eastbound = connections[(connections.direction < 180)]
+        westbound = connections[(connections.direction >= 180)]
+        map = westbound.explore(m=map, name='westbound graph edges', legend=False,
+                                style_kwds={'weight':2, 'color':'red', 'opacity':0.7})
+        map = eastbound.explore(m=map, name='eastbound graph edges', legend=False,
+                                style_kwds={'weight':2, 'color':'green', 'opacity':0.7})
+        return map
+    
+    def plot_graph_canvas(self):
+        '''
+        Plot the maritime traffic network graph on a white canvas
+        '''
+        G = self.G
+        # Create a dictionary mapping nodes to their positions
+        node_positions = {node: G.nodes[node]['position'] for node in G.nodes}
+        elarge = [(u, v) for (u, v, d) in G.edges(data=True) if d["weight"] > 4]
+        esmall = [(u, v) for (u, v, d) in G.edges(data=True) if d["weight"] <= 4]
+        
+        # Create the network plot
+        plt.figure(figsize=(10, 10))
+        #nx.draw(G, pos=node_positions, with_labels=True, node_size=300, node_color='skyblue', font_size=10, font_color='black', font_weight='bold')
+        # nodes
+        nx.draw_networkx_nodes(G, pos=node_positions, node_size=200, node_color='skyblue')
+        # edges
+        nx.draw_networkx_edges(G, pos=node_positions, edgelist=elarge, width=3)
+        nx.draw_networkx_edges(G, pos=node_positions, edgelist=esmall, width=1, alpha=0.5)
+        
+        # node labels
+        nx.draw_networkx_labels(G, pos=node_positions, font_size=8, font_family="sans-serif")
+        # edge weight labels
+        #edge_labels = nx.get_edge_attributes(G, "weight")
+        #nx.draw_networkx_edge_labels(G, pos=node_positions, edge_labels=edge_labels)
+        
+        ax = plt.gca()
+        ax.margins(0.08)
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+        
+        # Show the plot
+        plt.show()

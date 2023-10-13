@@ -38,6 +38,7 @@ class MaritimeTrafficNetwork:
     def get_trajectories_info(self):
         print(f'AIS messages: {len(self.gdf)}')
         print(f'Trajectories: {len(self.trajectories)}')
+        print(self.gdf.crs)
 
     def init_precomputed_significant_points(self, gdf):
         '''
@@ -103,6 +104,8 @@ class MaritimeTrafficNetwork:
         '''
         start = time.time()  # start timer
         significant_points = self.significant_points
+        print(significant_points.crs)
+        print(significant_points.head())
 
         # prepare clustering depending on metric
         if metric == 'euclidean':
@@ -113,7 +116,8 @@ class MaritimeTrafficNetwork:
             metric_params = {}
         elif metric == 'mahalanobis':
             columns = ['lat', 'lon', 'cog_before', 'cog_after']
-            V = np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
+            #V = np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
+            V = np.diag([1, 1, np.pi/18, np.pi/18])
             metric_params = {'V':V}
             metric_params_OPTICS = {'VI':np.linalg.inv(V)}
         else:
@@ -273,7 +277,7 @@ class MaritimeTrafficNetwork:
             # plot basemap
             map = folium.Map(location=center, tiles="OpenStreetMap", zoom_start=8)
             # plot traffic as raster overlay
-            map = visualize.traffic_raster_overlay(self.gdf, map)
+            map = visualize.traffic_raster_overlay(self.gdf.to_crs(4326), map)
         
         # plot cluster centroids and their convex hull
         cluster_centroids = self.waypoints

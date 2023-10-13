@@ -26,8 +26,9 @@ class MaritimeTrafficNetwork:
     '''
     DOCSTRING
     '''
-    def __init__(self, gdf):
+    def __init__(self, gdf, crs):
         self.gdf = gdf
+        self.crs = crs
         self.trajectories = mpd.TrajectoryCollection(self.gdf, traj_id_col='mmsi', obj_id_col='mmsi')
         self.significant_points_trajectory = []
         self.significant_points = []
@@ -36,9 +37,9 @@ class MaritimeTrafficNetwork:
         self.G = []
 
     def get_trajectories_info(self):
-        print(f'AIS messages: {len(self.gdf)}')
-        print(f'Trajectories: {len(self.trajectories)}')
-        print(self.gdf.crs)
+        print(f'Number of AIS messages: {len(self.gdf)}')
+        print(f'Number of trajectories: {len(self.trajectories)}')
+        print(f'Coordinate Reference System (CRS): {self.gdf.crs}')
 
     def init_precomputed_significant_points(self, gdf):
         '''
@@ -95,7 +96,8 @@ class MaritimeTrafficNetwork:
         end = time.time()  # end timer
         print(f'Done. Time elapsed: {(end-start)/60:.2f} minutes')
 
-    def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, min_cluster_size=15, eps=0.008, metric='euclidean'):
+    def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, min_cluster_size=15, eps=0.008, 
+                                  metric='euclidean', V=np.diag([1, 1, np.pi/18, np.pi/18])):
         '''
         Compute waypoints by clustering significant turning points
         :param method: Clustering method (supported: DBSCAN and HDBSCAN)
@@ -103,22 +105,21 @@ class MaritimeTrafficNetwork:
         :param eps: required parameter for DBSCAN
         '''
         start = time.time()  # start timer
+        # prepare data for clustering
         significant_points = self.significant_points
-        print(significant_points.crs)
-        print(significant_points.head())
+        significant_points['x'] = significant_points.geometry.x
+        significant_points['y'] = significant_points.geometry.y
 
         # prepare clustering depending on metric
         if metric == 'euclidean':
-            columns = ['lat', 'lon']
+            columns = ['x', 'y']
             metric_params = {}
         elif metric == 'haversine':
-            columns = ['lat', 'lon']
+            columns = ['x', 'y']
             metric_params = {}
         elif metric == 'mahalanobis':
-            columns = ['lat', 'lon', 'cog_before', 'cog_after']
-            #V = np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
-            V = np.diag([1, 1, np.pi/18, np.pi/18])
-            metric_params = {'V':V}
+            columns = ['x', 'y', 'cog_before', 'cog_after']
+            metric_params = {'V':V}   # np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
             metric_params_OPTICS = {'VI':np.linalg.inv(V)}
         else:
             print(f'{metric} is not a supported distance metric. Exiting waypoint calculation...')
@@ -154,30 +155,34 @@ class MaritimeTrafficNetwork:
             return
         
         # compute cluster centroids
-        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'speed', 'direction', 'n_members', 'convex_hull'])
+        cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'x', 'y', 
+                                                  'speed', 'direction', 'n_members', 'convex_hull'])
         for i in range(0, max(clustering.labels_)+1):
             lat = significant_points[clustering.labels_ == i].lat.mean()
             lon = significant_points[clustering.labels_ == i].lon.mean()
+            x = significant_points[clustering.labels_ == i].x.mean()
+            y = significant_points[clustering.labels_ == i].y.mean()
             speed = significant_points[clustering.labels_ == i].speed.mean()
             direction = ((significant_points[clustering.labels_ == i].cog_before +
                         significant_points[clustering.labels_ == i].cog_after)/2).mean()
             n_members = len(significant_points[clustering.labels_ == i])
-            centroid = pd.DataFrame([[i, lat, lon, speed, direction, n_members]], 
-                                    columns=['clusterID', 'lat', 'lon', 'speed', 'direction', 'n_members'])
+            centroid = pd.DataFrame([[i, lat, lon, x, y, speed, direction, n_members]], 
+                                    columns=['clusterID', 'lat', 'lon', 'x', 'y', 
+                                             'speed', 'direction', 'n_members'])
             cluster_centroids = pd.concat([cluster_centroids, centroid])
         
         significant_points['clusterID'] = clustering.labels_  # assign clusterID to each waypoint
         
         # convert waypoint and cluster centroid DataFrames to GeoDataFrames
         significant_points = gpd.GeoDataFrame(significant_points, 
-                                              geometry=gpd.points_from_xy(significant_points.lon,
-                                                                          significant_points.lat), 
-                                              crs="EPSG:4326")
+                                              geometry=gpd.points_from_xy(significant_points.x,
+                                                                          significant_points.y), 
+                                              crs=self.crs)
         significant_points.reset_index(inplace=True)
         cluster_centroids = gpd.GeoDataFrame(cluster_centroids, 
-                                             geometry=gpd.points_from_xy(cluster_centroids.lon,
-                                                                         cluster_centroids.lat),
-                                             crs="EPSG:4326")
+                                             geometry=gpd.points_from_xy(cluster_centroids.x,
+                                                                         cluster_centroids.y),
+                                             crs=self.crs)
         
         # compute convex hull of each cluster
         for i in range(0, max(clustering.labels_)+1):
@@ -198,6 +203,7 @@ class MaritimeTrafficNetwork:
         The edges are calculated by iterating through all trajectories. If a vessel passes through a pair of waypoints on its journey,
         an edge between the two corresponding nodes is added. The weight of the edge is the number of passages along this edge.
         '''     
+        print(f'Constructing maritime traffic network graph from waypoints and trajectories...')
         start = time.time()  # start timer
         # create graph adjacency matrix
         n_clusters = len(self.waypoints)
@@ -235,13 +241,13 @@ class MaritimeTrafficNetwork:
             G.nodes[node_id]['direction'] = self.waypoints.direction.iloc[i]
 
         # report and save results
-        print(f'Created maritime traffic network graph from waypoints and trajectories')
         print(f'Number of nodes: {G.number_of_nodes()}')
         print(f'Number of edges: {G.number_of_edges()}')
         self.G = G
 
         # Construct a GeoDataFrame from graph edges that is plottable on a map
         waypoints = self.waypoints
+        waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
         waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
         for orig, dest, weight in zip(A.row, A.col, A.data):
             # add linestring as edge
@@ -249,12 +255,14 @@ class MaritimeTrafficNetwork:
             p2 = waypoints[waypoints.clusterID == dest].geometry
             edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
             # compute the orientation fo the edge (COG)
+            p1 = Point(waypoints[waypoints.clusterID == orig].lon, waypoints[waypoints.clusterID == orig].lat)
+            p2 = Point(waypoints[waypoints.clusterID == dest].lon, waypoints[waypoints.clusterID == dest].lat)
             direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
             line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
                                 columns=['from', 'to', 'geometry', 'direction', 'passages'])
             waypoint_connections = pd.concat([waypoint_connections, line])
         # save result
-        self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs="EPSG:4326")
+        self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
 
         end = time.time()  # end timer
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
@@ -280,7 +288,8 @@ class MaritimeTrafficNetwork:
             map = visualize.traffic_raster_overlay(self.gdf.to_crs(4326), map)
         
         # plot cluster centroids and their convex hull
-        cluster_centroids = self.waypoints
+        cluster_centroids = self.waypoints.copy()
+        cluster_centroids.to_crs(4326, inplace=True)
         columns_points = ['clusterID', 'geometry', 'speed', 'direction', 'n_members']  # columns to plot
         columns_hull = ['clusterID', 'convex_hull', 'speed', 'direction', 'n_members']  # columns to plot
         
@@ -290,7 +299,7 @@ class MaritimeTrafficNetwork:
         map = eastbound[columns_points].explore(m=map, name='cluster centroids (eastbound)', legend=False,
                                                 marker_kwds={'radius':3},
                                                 style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':1})
-        eastbound.set_geometry('convex_hull', inplace=True)
+        eastbound.set_geometry('convex_hull', inplace=True, crs=self.crs)
         map = eastbound[columns_hull].explore(m=map, name='cluster convex hulls (eastbound)', legend=False,
                                               style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2})
         
@@ -300,7 +309,7 @@ class MaritimeTrafficNetwork:
         map = westbound[columns_points].explore(m=map, name='cluster centroids (westbound)', legend=False,
                                                 marker_kwds={'radius':3},
                                                 style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':1})
-        westbound.set_geometry('convex_hull', inplace=True)
+        westbound.set_geometry('convex_hull', inplace=True, crs=self.crs)
         map = westbound[columns_hull].explore(m=map, name='cluster convex hulls (westbound)', legend=False,
                                               style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':0.2})
         
@@ -310,7 +319,7 @@ class MaritimeTrafficNetwork:
         map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,
                                             marker_kwds={'radius':3},
                                             style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':1})
-        stops.set_geometry('convex_hull', inplace=True)
+        stops.set_geometry('convex_hull', inplace=True, crs=self.crs)
         map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
                                           style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
         #folium.LayerControl().add_to(map)

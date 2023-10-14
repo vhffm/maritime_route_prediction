@@ -34,7 +34,9 @@ class MaritimeTrafficNetwork:
         self.significant_points = []
         self.waypoints = []
         self.waypoint_connections = []
+        self.waypoint_connections_unpruned = []
         self.G = []
+        self.G_unpruned = []
 
     def get_trajectories_info(self):
         print(f'Number of AIS messages: {len(self.gdf)}')
@@ -196,12 +198,35 @@ class MaritimeTrafficNetwork:
         self.significant_points = significant_points
         self.waypoints = cluster_centroids
 
+    def prune_graph(self, min_passages):
+        '''
+        prunes the maritime traffic graph to only contain edges with more passages than min_passages
+        '''
+        A = nx.to_scipy_sparse_array(self.G, format='coo')
+        mask = A.data >= min_passages
+        A_pruned = coo_matrix((A.data[mask], (A.row[mask], A.col[mask])), shape=A.shape)
+        G_pruned = nx.from_scipy_sparse_array(A_pruned, create_using=nx.DiGraph)
+        G_pruned.nodes = self.G.nodes
+        self.G_pruned = G_pruned
+        self.waypoint_connections_pruned = self.waypoint_connections[self.waypoint_connections.passages >= min_passages]
+        print(f'Pruned Graph:')
+        print(f'Number of nodes: {G_pruned.number_of_nodes()}')
+        print(f'Number of edges: {G_pruned.number_of_edges()}')
+    
     def make_graph_from_waypoints(self, min_passages=3):
         '''
         Transform computed waypoints to a weighted, directed graph
         The nodes of the graph are self.waypoints
-        The edges are calculated by iterating through all trajectories. If a vessel passes through a pair of waypoints on its journey,
-        an edge between the two corresponding nodes is added. The weight of the edge is the number of passages along this edge.
+        The edges are calculated by iterating through all significant points in each trajectory. 
+        The significant points have been assigned a clusterID. Edges are added between pairwise clusters that follow each other 
+        in the significant points dataframe.
+        Example: The clusterID column of the significant point dataframe looks like this:
+                 1 1 1 4 4 5 5 7
+                 The algorithm extract the following edges from that:
+                 1-4, 4-5, 5-7
+        Weakness: Clusters that are intersected by the actual trajectory are not added as edges. The function aggregate_edges()
+        is built to rectify that, but is slow and does not catch all clusters.
+        THIS ALGORITHM NEEDS TO BE IMPROVED
         '''     
         print(f'Constructing maritime traffic network graph from waypoints and trajectories...')
         start = time.time()  # start timer
@@ -225,27 +250,9 @@ class MaritimeTrafficNetwork:
         # store adjacency matrix as sparse matrix in COO format
         row_indices, col_indices = zip(*coord_dict.keys())
         values = list(coord_dict.values())
-        A_raw = coo_matrix((values, (row_indices, col_indices)), shape=(n_clusters, n_clusters))
-        mask = A_raw.data >= min_passages
-        A = coo_matrix((A_raw.data[mask], (A_raw.row[mask], A_raw.col[mask])), shape=A_raw.shape)
+        A = coo_matrix((values, (row_indices, col_indices)), shape=(n_clusters, n_clusters))
 
-        # initialize directed graph from adjacency matrix
-        G = nx.from_scipy_sparse_array(A, create_using=nx.DiGraph)
-
-        # add node features
-        for i in range(0, len(self.waypoints)):
-            node_id = self.waypoints.clusterID.iloc[i]
-            G.nodes[node_id]['n_members'] = self.waypoints.n_members.iloc[i]
-            G.nodes[node_id]['position'] = (self.waypoints.lon.iloc[i], self.waypoints.lat.iloc[i])  # !changeg lat-lon to lon-lat for plotting
-            G.nodes[node_id]['speed'] = self.waypoints.speed.iloc[i]
-            G.nodes[node_id]['direction'] = self.waypoints.direction.iloc[i]
-
-        # report and save results
-        print(f'Number of nodes: {G.number_of_nodes()}')
-        print(f'Number of edges: {G.number_of_edges()}')
-        self.G = G
-
-        # Construct a GeoDataFrame from graph edges that is plottable on a map
+        # Construct a GeoDataFrame from graph edges
         waypoints = self.waypoints
         waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
         waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
@@ -261,9 +268,64 @@ class MaritimeTrafficNetwork:
             line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
                                 columns=['from', 'to', 'geometry', 'direction', 'passages'])
             waypoint_connections = pd.concat([waypoint_connections, line])
-        # save result
-        self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
 
+        # Aggregate edges recursively
+        # each edge that intersects the convex hull of another waypoint is divided in segments
+        # the segments are added to the adjacency matrix and the original edge is deleted
+        A_refined, waypoint_connections_refined, flag = geometry_utils.aggregate_edges(waypoints, waypoint_connections)
+        while flag:
+            A_refined, waypoint_connections_refined, flag = geometry_utils.aggregate_edges(waypoints, waypoint_connections_refined)
+        
+        # Construct a GeoDataFrame from graph edges
+        waypoints = self.waypoints
+        waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
+        waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
+        for orig, dest, weight in zip(A_refined.row, A_refined.col, A_refined.data):
+            # add linestring as edge
+            p1 = waypoints[waypoints.clusterID == orig].geometry
+            p2 = waypoints[waypoints.clusterID == dest].geometry
+            edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
+            # compute the orientation fo the edge (COG)
+            p1 = Point(waypoints[waypoints.clusterID == orig].lon, waypoints[waypoints.clusterID == orig].lat)
+            p2 = Point(waypoints[waypoints.clusterID == dest].lon, waypoints[waypoints.clusterID == dest].lat)
+            direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
+            line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
+                                columns=['from', 'to', 'geometry', 'direction', 'passages'])
+            waypoint_connections = pd.concat([waypoint_connections, line])
+        
+        # initialize directed graph from adjacency matrix
+        G = nx.from_scipy_sparse_array(A_refined, create_using=nx.DiGraph)
+
+        # add node features
+        for i in range(0, len(self.waypoints)):
+            node_id = self.waypoints.clusterID.iloc[i]
+            G.nodes[node_id]['n_members'] = self.waypoints.n_members.iloc[i]
+            G.nodes[node_id]['position'] = (self.waypoints.lon.iloc[i], self.waypoints.lat.iloc[i])  # !changed lat-lon to lon-lat for plotting
+            G.nodes[node_id]['speed'] = self.waypoints.speed.iloc[i]
+            G.nodes[node_id]['direction'] = self.waypoints.direction.iloc[i]
+
+        # Prune network
+        # Apply a filter: only edges with more than min_passages are part of the network
+        #mask = A_refined.data >= min_passages
+        #A_pruned = coo_matrix((A_refined.data[mask], (A_refined.row[mask], A_refined.col[mask])), shape=A_refined.shape)
+        #G_pruned = nx.from_scipy_sparse_array(A_pruned, create_using=nx.DiGraph)
+        #G_pruned.nodes = G.nodes
+        #waypoint_connections_pruned = waypoint_connections[waypoint_connections.passages >= min_passages]
+        
+        # report and save results
+        print('------------------------')
+        print(f'Unpruned Graph:')
+        print(f'Number of nodes: {G.number_of_nodes()}')
+        print(f'Number of edges: {G.number_of_edges()}')
+        print('------------------------')
+        self.G = G
+        #self.G_pruned = G_pruned
+        self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
+        #self.waypoint_connections_pruned = gpd.GeoDataFrame(waypoint_connections_pruned, geometry='geometry', crs=self.crs)
+
+        # Prune network
+        self.prune_graph(min_passages)
+        
         end = time.time()  # end timer
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
     
@@ -326,7 +388,7 @@ class MaritimeTrafficNetwork:
 
         return map
 
-    def map_graph(self):
+    def map_graph(self, pruned=False):
         '''
         Visualization function to map the maritime traffic network graph
         '''
@@ -334,7 +396,10 @@ class MaritimeTrafficNetwork:
         map = self.map_waypoints()
 
         # add connections
-        connections = self.waypoint_connections
+        if pruned:
+            connections = self.waypoint_connections_pruned.copy()
+        else:
+            connections = self.waypoint_connections.copy()
         eastbound = connections[(connections.direction < 180)]
         westbound = connections[(connections.direction >= 180)]
         map = westbound.explore(m=map, name='westbound graph edges', legend=False,

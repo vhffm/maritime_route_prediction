@@ -158,19 +158,19 @@ class MaritimeTrafficNetwork:
         
         # compute cluster centroids
         cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'x', 'y', 
-                                                  'speed', 'direction', 'n_members', 'convex_hull'])
+                                                  'speed', 'cog_before', 'cog_after', 'n_members', 'convex_hull'])
         for i in range(0, max(clustering.labels_)+1):
             lat = significant_points[clustering.labels_ == i].lat.mean()
             lon = significant_points[clustering.labels_ == i].lon.mean()
             x = significant_points[clustering.labels_ == i].x.mean()
             y = significant_points[clustering.labels_ == i].y.mean()
             speed = significant_points[clustering.labels_ == i].speed.mean()
-            direction = ((significant_points[clustering.labels_ == i].cog_before +
-                        significant_points[clustering.labels_ == i].cog_after)/2).mean()
+            cog_before = significant_points[clustering.labels_ == i].cog_before.mean()
+            cog_after = significant_points[clustering.labels_ == i].cog_after.mean()     
             n_members = len(significant_points[clustering.labels_ == i])
-            centroid = pd.DataFrame([[i, lat, lon, x, y, speed, direction, n_members]], 
+            centroid = pd.DataFrame([[i, lat, lon, x, y, speed, cog_before, cog_after, n_members]], 
                                     columns=['clusterID', 'lat', 'lon', 'x', 'y', 
-                                             'speed', 'direction', 'n_members'])
+                                             'speed', 'cog_before', 'cog_after', 'n_members'])
             cluster_centroids = pd.concat([cluster_centroids, centroid])
         
         significant_points['clusterID'] = clustering.labels_  # assign clusterID to each waypoint
@@ -302,15 +302,9 @@ class MaritimeTrafficNetwork:
             G.nodes[node_id]['n_members'] = self.waypoints.n_members.iloc[i]
             G.nodes[node_id]['position'] = (self.waypoints.lon.iloc[i], self.waypoints.lat.iloc[i])  # !changed lat-lon to lon-lat for plotting
             G.nodes[node_id]['speed'] = self.waypoints.speed.iloc[i]
-            G.nodes[node_id]['direction'] = self.waypoints.direction.iloc[i]
+            G.nodes[node_id]['cog_before'] = self.waypoints.cog_before.iloc[i]
+            G.nodes[node_id]['cog_after'] = self.waypoints.cog_after.iloc[i]
 
-        # Prune network
-        # Apply a filter: only edges with more than min_passages are part of the network
-        #mask = A_refined.data >= min_passages
-        #A_pruned = coo_matrix((A_refined.data[mask], (A_refined.row[mask], A_refined.col[mask])), shape=A_refined.shape)
-        #G_pruned = nx.from_scipy_sparse_array(A_pruned, create_using=nx.DiGraph)
-        #G_pruned.nodes = G.nodes
-        #waypoint_connections_pruned = waypoint_connections[waypoint_connections.passages >= min_passages]
         
         # report and save results
         print('------------------------')
@@ -319,9 +313,7 @@ class MaritimeTrafficNetwork:
         print(f'Number of edges: {G.number_of_edges()}')
         print('------------------------')
         self.G = G
-        #self.G_pruned = G_pruned
         self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
-        #self.waypoint_connections_pruned = gpd.GeoDataFrame(waypoint_connections_pruned, geometry='geometry', crs=self.crs)
 
         # Prune network
         self.prune_graph(min_passages)
@@ -352,11 +344,11 @@ class MaritimeTrafficNetwork:
         # plot cluster centroids and their convex hull
         cluster_centroids = self.waypoints.copy()
         cluster_centroids.to_crs(4326, inplace=True)
-        columns_points = ['clusterID', 'geometry', 'speed', 'direction', 'n_members']  # columns to plot
-        columns_hull = ['clusterID', 'convex_hull', 'speed', 'direction', 'n_members']  # columns to plot
+        columns_points = ['clusterID', 'geometry', 'speed', 'cog_before', 'cog_after', 'n_members']  # columns to plot
+        columns_hull = ['clusterID', 'convex_hull', 'speed', 'cog_before', 'cog_after', 'n_members']  # columns to plot
         
         # plot eastbound cluster centroids
-        eastbound = cluster_centroids[(cluster_centroids.direction < 180) & (cluster_centroids.speed >= 1.0)]
+        eastbound = cluster_centroids[(cluster_centroids.cog_after < 180) & (cluster_centroids.speed >= 1.0)]
         eastbound.set_geometry('geometry', inplace=True)
         map = eastbound[columns_points].explore(m=map, name='cluster centroids (eastbound)', legend=False,
                                                 marker_kwds={'radius':3},
@@ -366,7 +358,7 @@ class MaritimeTrafficNetwork:
                                               style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2})
         
         # plot westbound cluster centroids
-        westbound = cluster_centroids[(cluster_centroids.direction >= 180) & (cluster_centroids.speed >= 1.0)]
+        westbound = cluster_centroids[(cluster_centroids.cog_after >= 180) & (cluster_centroids.speed >= 1.0)]
         westbound.set_geometry('geometry', inplace=True)
         map = westbound[columns_points].explore(m=map, name='cluster centroids (westbound)', legend=False,
                                                 marker_kwds={'radius':3},

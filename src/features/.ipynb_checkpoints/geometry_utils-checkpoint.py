@@ -53,9 +53,9 @@ def aggregate_edges(waypoints, waypoint_connections):
     for i in range(0, len(waypoint_connections)):
         edge = waypoint_connections['geometry'].iloc[i]
         mask = edge.intersects(waypoints['convex_hull'])
-        subset = waypoints[mask][['clusterID', 'direction', 'geometry']]
+        subset = waypoints[mask][['clusterID', 'cog_before', 'cog_after', 'geometry']]
         # drop waypoints with traffic direction that does not match edge direction
-        subset = subset[np.abs(subset.direction - waypoint_connections.direction.iloc[i]) < 30]
+        subset = subset[np.abs((subset.cog_before + subset.cog_after)/2 - waypoint_connections.direction.iloc[i]) < 30]
         # When we find intersections that match the direction of the edge, we split the edge
         if len(subset)>2:
             # sort by distance

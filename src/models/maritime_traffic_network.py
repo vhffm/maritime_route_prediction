@@ -252,7 +252,6 @@ class MaritimeTrafficNetwork:
                 close_wps['distance_to_origin'] = distance_to_origin.tolist()
                 # angle between line segment and mean traffic direction in each waypoint
                 close_wps['angle'] = np.abs(geometry_utils.compass_mean(close_wps['cog_before'], close_wps['cog_after']) - segment['direction']) 
-                #close_wps['angle'] = np.abs((close_wps['cog_before'] + close_wps['cog_after'])/2 - segment['direction']) 
                 # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
                 passed_wps = close_wps[(close_wps['distance_to_line']<max_distance) & (close_wps['angle']<max_angle)]
                 passed_wps.sort_values(by='distance_to_origin', inplace=True)
@@ -296,20 +295,27 @@ class MaritimeTrafficNetwork:
         # Construct a GeoDataFrame from graph edges
         waypoints = self.waypoints.copy()
         waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
-        waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
+        waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
         for orig, dest, weight in zip(A.row, A.col, A.data):
             # add linestring as edge
             p1 = waypoints[waypoints.clusterID == orig].geometry
             p2 = waypoints[waypoints.clusterID == dest].geometry
             edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
+            length = edge.length
             # compute the orientation fo the edge (COG)
             p1 = Point(waypoints[waypoints.clusterID == orig].lon, waypoints[waypoints.clusterID == orig].lat)
             p2 = Point(waypoints[waypoints.clusterID == dest].lon, waypoints[waypoints.clusterID == dest].lat)
             direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
-            line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
-                                columns=['from', 'to', 'geometry', 'direction', 'passages'])
+            line = pd.DataFrame([[orig, dest, edge, direction, length, weight]], 
+                                columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
             waypoint_connections = pd.concat([waypoint_connections, line])
         waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
+
+        # Add edge lengths as edge features
+        for i in range(0, len(waypoint_connections)):
+            orig = waypoint_connections['from'].iloc[i]
+            dest = waypoint_connections['to'].iloc[i]
+            G[orig][dest]['length'] = waypoint_connections['length'].iloc[i]
        
         # report and save results
         print('Done!')
@@ -329,7 +335,6 @@ class MaritimeTrafficNetwork:
     
     def map_waypoints(self, detailed_plot=False, center=[59, 5]):
         # plotting
-        detailed_plot = False
         if detailed_plot:
             columns = ['geometry', 'mmsi']  # columns to be plotted
             # plot simplified trajectories
@@ -375,13 +380,14 @@ class MaritimeTrafficNetwork:
         
         # plot stop cluster centroids
         stops = cluster_centroids[cluster_centroids.speed < 1.0]
-        stops.set_geometry('geometry', inplace=True)
-        map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,
-                                            marker_kwds={'radius':3},
-                                            style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':1})
-        stops.set_geometry('convex_hull', inplace=True, crs=self.crs)
-        map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
-                                          style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
+        if len(stops) > 0:
+            stops.set_geometry('geometry', inplace=True)
+            map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,
+                                                marker_kwds={'radius':3},
+                                                style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':1})
+            stops.set_geometry('convex_hull', inplace=True, crs=self.crs)
+            map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
+                                              style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
         #folium.LayerControl().add_to(map)
 
         return map

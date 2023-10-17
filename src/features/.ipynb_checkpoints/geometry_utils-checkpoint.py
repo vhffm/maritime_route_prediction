@@ -40,7 +40,24 @@ def calculate_initial_compass_bearing(point1, point2):
 
     return compass_bearing
 
-def aggregate_edges(waypoints, waypoint_connections):
+def compass_mean(bearings1, bearings2):
+    # Convert compass bearings to radians
+    rad_bearings1 = np.radians(bearings1)
+    rad_bearings2 = np.radians(bearings2)
+
+    # Convert bearings to complex numbers on the unit circle
+    complex_bearings1 = np.exp(1j * rad_bearings1)
+    complex_bearings2 = np.exp(1j * rad_bearings2)
+
+    # Calculate the mean complex bearing
+    mean_complex_bearing = (complex_bearings1 + complex_bearings2) / 2
+
+    # Calculate the mean bearing in degrees
+    mean_bearing = np.degrees(np.angle(mean_complex_bearing)) % 360
+
+    return mean_bearing
+
+def LEGACY_aggregate_edges(waypoints, waypoint_connections):
     # refine the graph
     # each edge that intersects the convex hull of another waypoint is divided in segments
     # the segments are added to the adjacency matrix and the original edge is deleted

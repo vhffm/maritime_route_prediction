@@ -34,9 +34,9 @@ class MaritimeTrafficNetwork:
         self.significant_points = []
         self.waypoints = []
         self.waypoint_connections = []
-        self.waypoint_connections_unpruned = []
+        self.waypoint_connections_pruned = []
         self.G = []
-        self.G_unpruned = []
+        self.G_pruned = []
 
     def get_trajectories_info(self):
         print(f'Number of AIS messages: {len(self.gdf)}')
@@ -207,14 +207,23 @@ class MaritimeTrafficNetwork:
         A_pruned = coo_matrix((A.data[mask], (A.row[mask], A.col[mask])), shape=A.shape)
         G_pruned = nx.from_scipy_sparse_array(A_pruned, create_using=nx.DiGraph)
         G_pruned.nodes = self.G.nodes
-        self.G_pruned = G_pruned
         self.waypoint_connections_pruned = self.waypoint_connections[self.waypoint_connections.passages >= min_passages]
+        # add edge features
+        for i in range(0, len(self.waypoint_connections_pruned)):
+            orig = self.waypoint_connections_pruned['from'].iloc[i]
+            dest = self.waypoint_connections_pruned['to'].iloc[i]
+            G_pruned[orig][dest]['length'] = self.waypoint_connections_pruned['length'].iloc[i]
+            G_pruned[orig][dest]['direction'] = self.waypoint_connections_pruned['direction'].iloc[i]
+            G_pruned[orig][dest]['geometry'] = self.waypoint_connections_pruned['geometry'].iloc[i]
+        self.G_pruned = G_pruned
+        print('------------------------')
         print(f'Pruned Graph:')
-        print(f'Number of nodes: {G_pruned.number_of_nodes()}')
+        print(f'Number of nodes: {G_pruned.number_of_nodes()} ({nx.number_of_isolates(G_pruned)} isolated)')
         print(f'Number of edges: {G_pruned.number_of_edges()}')
+        print('------------------------')
     
 
-    def make_graph_from_waypoints(self, max_distance=100, max_angle=45):
+    def make_graph_from_waypoints(self, max_distance=10, max_angle=45):
         '''
         Transform computed waypoints to a weighted, directed graph
         The nodes of the graph are self.waypoints
@@ -292,7 +301,7 @@ class MaritimeTrafficNetwork:
             G.nodes[node_id]['cog_before'] = self.waypoints.cog_before.iloc[i]
             G.nodes[node_id]['cog_after'] = self.waypoints.cog_after.iloc[i]
         
-        # Construct a GeoDataFrame from graph edges
+        # Construct a GeoDataFrame from graph edges (for plotting reasons)
         waypoints = self.waypoints.copy()
         waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
         waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
@@ -311,11 +320,13 @@ class MaritimeTrafficNetwork:
             waypoint_connections = pd.concat([waypoint_connections, line])
         waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
 
-        # Add edge lengths as edge features
+        # Add edge features
         for i in range(0, len(waypoint_connections)):
             orig = waypoint_connections['from'].iloc[i]
             dest = waypoint_connections['to'].iloc[i]
             G[orig][dest]['length'] = waypoint_connections['length'].iloc[i]
+            G[orig][dest]['direction'] = waypoint_connections['direction'].iloc[i]
+            G[orig][dest]['geometry'] = waypoint_connections['geometry'].iloc[i]
        
         # report and save results
         print('Done!')

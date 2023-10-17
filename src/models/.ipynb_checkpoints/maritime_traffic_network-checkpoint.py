@@ -120,7 +120,7 @@ class MaritimeTrafficNetwork:
             columns = ['x', 'y']
             metric_params = {}
         elif metric == 'mahalanobis':
-            columns = ['x', 'y', 'cog_before', 'cog_after']
+            columns = ['x', 'y', 'cog_before', 'cog_after', 'speed']
             metric_params = {'V':V}   # np.diag([0.01, 0.01, 1e6, 1e6])  # mahalanobis distance parameter matrix
             metric_params_OPTICS = {'VI':np.linalg.inv(V)}
         else:
@@ -214,7 +214,7 @@ class MaritimeTrafficNetwork:
         print(f'Number of edges: {G_pruned.number_of_edges()}')
     
 
-    def make_graph_from_waypoints(self, min_passages=3, max_distance=50, max_angle=30):
+    def make_graph_from_waypoints(self, max_distance=100, max_angle=45):
         '''
         Transform computed waypoints to a weighted, directed graph
         The nodes of the graph are self.waypoints
@@ -321,14 +321,12 @@ class MaritimeTrafficNetwork:
         print('Done!')
         print('------------------------')
         print(f'Unpruned Graph:')
-        print(f'Number of nodes: {G.number_of_nodes()}')
+        print(f'Number of nodes: {G.number_of_nodes()} ({nx.number_of_isolates(G)} isolated)')
         print(f'Number of edges: {G.number_of_edges()}')
+        print(f'Network is (weakly) connected: {nx.is_weakly_connected(G)}')
         print('------------------------')
         self.G = G
         self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
-
-        # Prune network
-        self.prune_graph(min_passages)
         
         end = time.time()
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
@@ -359,7 +357,7 @@ class MaritimeTrafficNetwork:
         columns_hull = ['clusterID', 'convex_hull', 'speed', 'cog_before', 'cog_after', 'n_members']  # columns to plot
         
         # plot eastbound cluster centroids
-        eastbound = cluster_centroids[(cluster_centroids.cog_after < 180) & (cluster_centroids.speed >= 1.0)]
+        eastbound = cluster_centroids[(cluster_centroids.cog_after < 180) & (cluster_centroids.speed >= 2.0)]
         eastbound.set_geometry('geometry', inplace=True)
         map = eastbound[columns_points].explore(m=map, name='cluster centroids (eastbound)', legend=False,
                                                 marker_kwds={'radius':3},
@@ -369,7 +367,7 @@ class MaritimeTrafficNetwork:
                                               style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2})
         
         # plot westbound cluster centroids
-        westbound = cluster_centroids[(cluster_centroids.cog_after >= 180) & (cluster_centroids.speed >= 1.0)]
+        westbound = cluster_centroids[(cluster_centroids.cog_after >= 180) & (cluster_centroids.speed >= 2.0)]
         westbound.set_geometry('geometry', inplace=True)
         map = westbound[columns_points].explore(m=map, name='cluster centroids (westbound)', legend=False,
                                                 marker_kwds={'radius':3},
@@ -379,7 +377,7 @@ class MaritimeTrafficNetwork:
                                               style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':0.2})
         
         # plot stop cluster centroids
-        stops = cluster_centroids[cluster_centroids.speed < 1.0]
+        stops = cluster_centroids[cluster_centroids.speed < 2.0]
         if len(stops) > 0:
             stops.set_geometry('geometry', inplace=True)
             map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,

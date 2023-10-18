@@ -215,6 +215,7 @@ class MaritimeTrafficNetwork:
             G_pruned[orig][dest]['length'] = self.waypoint_connections_pruned['length'].iloc[i]
             G_pruned[orig][dest]['direction'] = self.waypoint_connections_pruned['direction'].iloc[i]
             G_pruned[orig][dest]['geometry'] = self.waypoint_connections_pruned['geometry'].iloc[i]
+            G_pruned[orig][dest]['inverse_weight'] = 1/self.waypoint_connections['passages'].iloc[i]
         self.G_pruned = G_pruned
         print('------------------------')
         print(f'Pruned Graph:')
@@ -327,6 +328,7 @@ class MaritimeTrafficNetwork:
             G[orig][dest]['length'] = waypoint_connections['length'].iloc[i]
             G[orig][dest]['direction'] = waypoint_connections['direction'].iloc[i]
             G[orig][dest]['geometry'] = waypoint_connections['geometry'].iloc[i]
+            G[orig][dest]['inverse_weight'] = 1/waypoint_connections['passages'].iloc[i]
        
         # report and save results
         print('Done!')
@@ -341,6 +343,8 @@ class MaritimeTrafficNetwork:
         
         end = time.time()
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+    
+    def assign_trajectory_to g
     
     def map_waypoints(self, detailed_plot=False, center=[59, 5]):
         # plotting

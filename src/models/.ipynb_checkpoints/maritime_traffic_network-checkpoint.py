@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 from sklearn.cluster import DBSCAN, HDBSCAN, OPTICS
 from scipy.sparse import coo_matrix
-from shapely.geometry import Point, LineString
+from shapely.geometry import Point, LineString, MultiLineString
+from shapely import ops
 import networkx as nx
 import time
 import folium
@@ -343,6 +344,149 @@ class MaritimeTrafficNetwork:
         
         end = time.time()
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+    
+    def trajectory_to_path(self, trajectory):
+        '''
+        find the best path along the graph for a given trajectory and evaluate goodness of fit
+        :param trajectory: a single MovingPandas Trajectory object
+        '''
+        G = self.G_pruned.copy()
+        waypoints = self.waypoints.copy()
+        connections = self.waypoint_connections_pruned.copy()
+        points = trajectory.to_point_gdf()
+        mmsi = points.mmsi.unique()[0]
+        
+        ### GET START POINT ###
+        # map trajectory start point to the closest waypoint available
+        orig = points.iloc[0].geometry  # get trajectory start point
+        orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+                                                                    Point(points.iloc[9].lon, points.iloc[9].lat)) # get initial cog
+        mask = np.abs(waypoints.cog_before - orig_cog) < 45  # only consider waypoints that have similar direction
+        distances = orig.distance(waypoints[mask].geometry)
+        masked_idx = np.argmin(distances)
+        orig_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
+        # find trajectory point that is closest to the centroid of the first waypoint
+        # this is where we start measuring
+        orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
+        idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
+        # Now we have found the first waypoint and the first point on the trajectory closest to that waypoint
+        
+        ### GET END POINT ###
+        # map trajectory end point to the closest waypoint available
+        dest = points.iloc[-1].geometry  # get end point
+        dest_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[-10].lon, points.iloc[-10].lat), 
+                                                                    Point(points.iloc[-1].lon, points.iloc[-1].lat)) # get initial cog
+        mask = np.abs(waypoints.cog_before - dest_cog) < 45  # only consider waypoints that have the same direction
+        distances = dest.distance(waypoints[mask].geometry)
+        masked_idx = np.argmin(distances)
+        dest_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
+        # find trajectory point that is closest to the centroid of the last waypoint
+        # this is where we end measuring
+        dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
+        idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
+        # Now we have found the last waypoint and the last point on the trajectory closest to that waypoint
+        #print(f'start: {orig_WP}, end: {dest_WP}')
+        
+        #### Find path between origin and destination
+        path = [orig_WP]
+        current_WP = orig_WP
+                
+        # find a path from start to end waypoint
+        while path[-1] != dest_WP:
+            # Check if a next path segment is available
+            if len(list(G.neighbors(current_WP))) > 0:
+                # iterate over all connected waypoints that the current waypoint is connected to
+                # find next waypoint closest to the trajectory
+                shortest_mean_distance = np.inf
+                for candidate_WP in G.neighbors(current_WP):
+                    # calculate mean distance between the trajectory and the edge between current and candidate waypoint
+                    # get edge between current and candidate waypoint
+                    edge = connections[(connections['from'] == current_WP) & (connections['to'] == candidate_WP)].geometry.item()
+                    # get trajectory segment between the two waypoints
+                    # find trajectory point closest to current waypoint
+                    current_WP_point = waypoints[waypoints.clusterID==current_WP]['geometry'].item()
+                    distances = points.distance(current_WP_point)  # get coordinates of waypoint centroid)
+                    p1_idx = np.argmin(distances)
+                    # find trajectory point closest to candidate waypoint
+                    candidate_WP_point = waypoints[waypoints.clusterID==candidate_WP]['geometry'].item()
+                    distances = points.iloc[p1_idx:-1].distance(candidate_WP_point)  # get coordinates of waypoint centroid)
+                    p2_idx = np.argmin(distances) + p1_idx
+                    # compute mean distance between trajectory segment and edge
+                    mean_distance = points[p1_idx:p2_idx].distance(edge).mean()
+                    # compute trajectory COG close to candidate waypoint
+                    p2_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx-3].lon, points.iloc[p2_idx-3].lat), 
+                                                                              Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat))
+                    # get candidate waypoint traffic direction
+                    candidate_WP_cog = waypoints[waypoints.clusterID==candidate_WP]['cog_before'].item()
+                    angle = (p2_cog - candidate_WP_cog + 180) % 360 - 180
+                    if ((mean_distance < shortest_mean_distance) & (np.abs(angle)<30)):
+                        next_WP = candidate_WP
+                        shortest_mean_distance = mean_distance
+                if next_WP == current_WP:
+                    print('Got stuck. Terminating...')
+                    break
+                else:
+                    path.append(next_WP) # append next waypoint to path
+                    G.remove_node(current_WP)  # drop current waypoint from graph to avoid going in circles
+                    current_WP = next_WP
+            else:
+                print('No more adjacent waypoints. Terminating...')
+                break
+        
+        # make trajectory from path
+        path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry'])
+        for j in range(0, len(path)-1):
+            edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+            temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge]], columns=['mmsi', 'orig', 'dest', 'geometry'])
+            path_df = pd.concat([path_df, temp])
+        path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+        
+        ###########
+        # evaluate goodness of fit
+        ###########
+        eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+        multi_line = MultiLineString(list(path_df.geometry))
+        edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+        distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+        mean_dist = distances.mean()
+        median_dist = distances.median()
+        max_dist = distances.max()
+        evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                           'mean_dist':mean_dist,
+                                           'median_dist':median_dist,
+                                           'max_dist':max_dist,
+                                           'distances':[distances.tolist()]})
+        # report results
+        #plt.boxplot(distances)
+        #plt.title('Distance between trajectory and edge sequence')
+        #plt.ylabel('Distance (m)')
+        #plt.show()
+        #evaluation_results.head()
+        return path_df, evaluation_results
+
+    def dijkstra_shortest_path(self, orig, dest, weight='inverse_weight'):
+        '''
+        outputs the shortest path in the network using Dijkstra's algorithm.
+        :param orig: int, ID of the start waypoint
+        :param dest: int, ID of the destination waypoint
+        :param weight: string, name of the edge feature to be used as weight in Dijsktra's algorithm
+        '''     
+        try:
+            # compute shortest path using dijsktra's algorithm (outputs a list of nodes)
+            shortest_path = nx.shortest_path(self.G_pruned, orig, dest, weight=weight)
+        except:
+            print(f'Nodes {orig} and {dest} are not connected. Exiting...')
+            return False
+        else:
+            # generate plottable GeoDataFrame from dijkstra path
+            dijkstra_path_df = pd.DataFrame(columns=['orig', 'dest', 'geometry'])
+            connections = self.waypoint_connections_pruned.copy()
+            for j in range(0, len(shortest_path)-1):
+                edge = connections[(connections['from'] == shortest_path[j]) & (connections['to'] == shortest_path[j+1])].geometry.item()
+                temp = pd.DataFrame([[shortest_path[j], shortest_path[j+1], edge]], columns=['orig', 'dest', 'geometry'])
+                dijkstra_path_df = pd.concat([dijkstra_path_df, temp])
+            dijkstra_path_df = gpd.GeoDataFrame(dijkstra_path_df, geometry='geometry', crs=self.crs)
+            return dijkstra_path_df
     
     def map_waypoints(self, detailed_plot=False, center=[59, 5]):
         # plotting

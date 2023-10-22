@@ -1,5 +1,6 @@
 from math import atan2, cos, degrees, pi, radians, sin, sqrt
 import shapely
+import movingpandas as mpd
 from geopy import distance
 from geopy.distance import geodesic
 from packaging.version import Version
@@ -9,6 +10,7 @@ import numpy as np
 import geopandas as gpd
 import pandas as pd
 from scipy.sparse import coo_matrix
+from collections import OrderedDict
 
 
 def calculate_initial_compass_bearing(point1, point2):
@@ -56,6 +58,106 @@ def compass_mean(bearings1, bearings2):
     mean_bearing = np.degrees(np.angle(mean_complex_bearing)) % 360
 
     return mean_bearing
+
+def find_orig_WP(points, waypoints):
+    '''
+    Given a trajectory, find the closest waypoint to the start of the trajectory
+    '''
+    orig = points.iloc[0].geometry  # get trajectory start point
+    # find out if trajectory starts in a stop point
+    try:
+        orig_speed = points.iloc[0:5].speed.mean()
+        if orig_speed < 2:
+            orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+                                                         Point(points.iloc[40].lon, points.iloc[40].lat)) # get initial cog
+            angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
+            mask = ((waypoints.speed < 2) & (np.abs(angle) < 45))
+            #mask = np.abs(angle) < 45
+        else:
+            orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+                                                         Point(points.iloc[9].lon, points.iloc[9].lat)) # get initial cog
+            angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
+            mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
+    except:
+        orig_speed = points.iloc[0:2].speed.mean()
+        orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+                                                                        Point(points.iloc[1].lon, points.iloc[1].lat)) # get initial cog
+        angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
+        mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
+    distances = orig.distance(waypoints[mask].geometry)
+    masked_idx = np.argmin(distances)
+    orig_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
+    # find trajectory point that is closest to the centroid of the first waypoint
+    # this is where we start measuring
+    orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
+    idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
+    
+    return orig_WP, idx_orig
+
+def find_dest_WP(points, waypoints):
+    dest = points.iloc[-1].geometry  # get end point
+    try:
+        dest_speed = points.iloc[-5:-1].speed.mean()
+        if dest_speed < 2:
+            mask = (waypoints.speed < 2)
+        else:
+            dest_cog = calculate_initial_compass_bearing(Point(points.iloc[-10].lon, points.iloc[-10].lat), 
+                                                         Point(points.iloc[-1].lon, points.iloc[-1].lat)) # get initial cog
+            angle = (dest_cog - waypoints.cog_before + 180) % 360 - 180
+            mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
+    except:
+        dest_speed = points.iloc[-3:-1].speed.mean()
+        dest_cog = calculate_initial_compass_bearing(Point(points.iloc[-2].lon, points.iloc[-2].lat), 
+                                                     Point(points.iloc[-1].lon, points.iloc[-1].lat)) # get initial cog
+        angle = (dest_cog - waypoints.cog_before + 180) % 360 - 180
+        mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
+    distances = dest.distance(waypoints[mask].geometry)
+    masked_idx = np.argmin(distances)
+    dest_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
+    # find trajectory point that is closest to the centroid of the last waypoint
+    # this is where we end measuring
+    dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
+    idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
+    return dest_WP, idx_dest
+
+def find_WP_intersections(trajectory, waypoints):
+    '''
+    given a trajectory, find all waypoint intersections in the correct order
+    '''
+    max_distance = 50
+    max_angle = 30
+    # simplofy trajectory
+    simplified_trajectory = mpd.DouglasPeuckerGeneralizer(trajectory).generalize(tolerance=10)
+    simplified_trajectory.add_direction()
+    trajectory_segments = simplified_trajectory.to_line_gdf()
+    # filter waypoints: only consider waypoints within a certain distance to the trajectory
+    distances = trajectory.distance(waypoints['convex_hull'])
+    mask = distances < max_distance
+    close_wps = waypoints[mask]
+    passages = []  # initialize ordered list of waypoint passages per line segment
+    for i in range(0, len(trajectory_segments)-1):
+        segment = trajectory_segments.iloc[i]
+        # distance of each segment to the selection of close waypoints
+        distance_to_line = segment['geometry'].distance(close_wps.convex_hull)  # distance between line segment and waypoint convex hull  
+        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps.geometry)  # distance between first point of segment and waypoint centroids (needed for sorting)
+        close_wps['distance_to_line'] = distance_to_line.tolist()
+        close_wps['distance_to_origin'] = distance_to_origin.tolist()
+        # angle between line segment and mean traffic direction in each waypoint
+        WP_cog_before = close_wps['cog_before'] 
+        WP_cog_after  = close_wps['cog_after']
+        trajectory_cog = segment['direction']
+        #print('WP COG before: ', WP_cog_before, 'WP COG after: ', WP_cog_after, 'Trajectory COG: ', trajectory_cog)
+        close_wps['angle_before'] = np.abs(WP_cog_before - trajectory_cog + 180) % 360 - 180
+        close_wps['angle_after'] = np.abs(WP_cog_after - trajectory_cog + 180) % 360 - 180
+        # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
+        mask = ((close_wps['distance_to_line']<max_distance) & 
+                (np.abs(close_wps['angle_before'])<max_angle) & 
+                (np.abs(close_wps['angle_after'])<max_angle))
+        passed_wps = close_wps[mask]
+        passed_wps.sort_values(by='distance_to_origin', inplace=True)
+        passages.extend(passed_wps['clusterID'].tolist())
+    
+    return list(OrderedDict.fromkeys(passages))
 
 def LEGACY_aggregate_edges(waypoints, waypoint_connections):
     # refine the graph

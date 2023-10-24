@@ -203,6 +203,156 @@ class MaritimeTrafficNetwork:
         self.significant_points = significant_points
         self.waypoints = cluster_centroids
 
+    def merge_stop_points(self, max_speed=2):
+        '''
+        merges stop points (criterion max_speed) together that intersect with their convex hull
+        '''
+        waypoints = self.waypoints.copy()
+        stop_points = waypoints[waypoints['speed'] < max_speed]
+        columns = stop_points.columns.tolist()
+        columns.append('members')
+        merged_stop_points = pd.DataFrame(columns=columns)
+        drop_IDs = []
+        for i in range(0, len(stop_points)):
+            current_stop_point = stop_points.iloc[i]
+            mask = current_stop_point['convex_hull'].intersects(stop_points['convex_hull'])
+            intersect_stop_points = stop_points[mask]
+            members = intersect_stop_points['clusterID'].unique()
+            drop_IDs.append(members.tolist())
+            convex_hull = ops.unary_union(intersect_stop_points['convex_hull'])
+            clusterID = members[0]
+            lat = current_stop_point['lat']
+            lon = current_stop_point['lon']
+            x = current_stop_point['x']
+            y = current_stop_point['y']
+            speed = intersect_stop_points['speed'].mean()
+            n_members = intersect_stop_points['n_members'].sum()
+            geometry = Point(x, y)
+            if clusterID not in merged_stop_points['clusterID'].unique():
+                line = pd.DataFrame([[clusterID, lat, lon, x, y, speed, 0, 0, n_members, convex_hull, geometry, members]], 
+                                    columns=columns)
+                merged_stop_points = pd.concat([merged_stop_points, line])
+        merged_stop_points = gpd.GeoDataFrame(merged_stop_points, geometry='geometry', crs=self.crs)
+        
+        # adjust waypoints
+        drop_IDs = set(item for sublist in drop_IDs for item in sublist)
+        drop_IDs = list(drop_IDs)
+        mask = ~waypoints['clusterID'].isin(drop_IDs)
+        new_waypoints = waypoints[mask]
+        new_waypoints = pd.concat([new_waypoints, merged_stop_points[new_waypoints.columns]])
+        new_waypoints = gpd.GeoDataFrame(new_waypoints, geometry='geometry', crs=self.crs)
+        
+        # adjust waypoint connections
+        waypoint_connections = self.waypoint_connections.copy()
+        drop_IDs = []
+        for i in range(0, len(merged_stop_points)):
+            merged_stop_point = merged_stop_points.iloc[i]
+            merge_nodes = merged_stop_point['members']
+            #print('==================')
+            #print(waypoint_connections[waypoint_connections['from']==merge_nodes[0]][['from', 'to', 'passages']])
+            #print(waypoint_connections[waypoint_connections['to']==merge_nodes[0]][['from', 'to', 'passages']])
+            #print('Merge nodes:', merge_nodes)
+            for j in range(1, len(merge_nodes)):
+                #print('Current merge node: ', merge_nodes[j])
+                # outgoing connections
+                from_connections = waypoint_connections[waypoint_connections['from']==merge_nodes[j]]
+                #print(from_connections[['from', 'to', 'passages']])
+                for k in range(0, len(from_connections)):
+                    #print('Current "to" node: ', from_connections['to'].iloc[k])
+                    add_passages_from = from_connections['passages'].iloc[k]
+                    # no self loops
+                    if merge_nodes[0] == from_connections['to'].iloc[k]:
+                        continue
+                    mask = ((waypoint_connections['from']==merge_nodes[0]) &
+                           (waypoint_connections['to']==from_connections['to'].iloc[k]))
+                    if len(waypoint_connections[mask]) > 0:
+                        #print(f'Increasing edge weight from {merge_nodes[0]} to {from_connections["to"].iloc[k]}')
+                        waypoint_connections[mask]['passages'] += add_passages_from
+                    else:
+                        # add linestring as edge
+                        #print(f'Adding new edge from {merge_nodes[0]} to {from_connections["to"].iloc[k]}')
+                        orig = merge_nodes[0]
+                        dest = from_connections['to'].iloc[k]
+                        p1 = new_waypoints[new_waypoints.clusterID == orig]['geometry']
+                        p2 = waypoints[waypoints.clusterID == dest]['geometry']
+                        #print(p1, p2)
+                        edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
+                        length = edge.length
+                        # compute the orientation fo the edge (COG)
+                        p1 = Point(new_waypoints[new_waypoints.clusterID == orig].lon, new_waypoints[new_waypoints.clusterID == orig].lat)
+                        p2 = Point(waypoints[waypoints.clusterID == dest].lon, waypoints[waypoints.clusterID == dest].lat)
+                        direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
+                        line = pd.DataFrame([[orig, dest, edge, direction, length, add_passages_from]], 
+                                            columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
+                        waypoint_connections = pd.concat([waypoint_connections, line])
+                
+                #incoming connections
+                to_connections = waypoint_connections[waypoint_connections['to']==merge_nodes[j]]
+                #print(to_connections[['from', 'to', 'passages']])
+                for k in range(0, len(to_connections)):
+                    #print('Current "from" node: ', to_connections['from'].iloc[k])
+                    add_passages_to = to_connections['passages'].iloc[k]
+                    # no self loops
+                    if merge_nodes[0] == to_connections['from'].iloc[k]:
+                        continue
+                    mask = ((waypoint_connections['to']==merge_nodes[0]) &
+                           (waypoint_connections['from']==to_connections['from'].iloc[k]))
+                    if  len(waypoint_connections[mask]) > 0:
+                        #print(f'Increasing edge weight from {to_connections["to"].iloc[k]} to {merge_nodes[0]}')
+                        waypoint_connections[mask]['passages'] += add_passages_to
+                    else:
+                        # add linestring as edge
+                        #print(f'Adding new edge from {to_connections["from"].iloc[k]} to {merge_nodes[0]}')
+                        dest = merge_nodes[0]
+                        orig = to_connections['from'].iloc[k]
+                        p1 = waypoints[waypoints.clusterID == orig]['geometry']
+                        p2 = new_waypoints[new_waypoints.clusterID == dest]['geometry']
+                        #print(p1, p2)
+                        edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
+                        length = edge.length
+                        # compute the orientation fo the edge (COG)
+                        p1 = Point(waypoints[waypoints.clusterID == orig].lon, waypoints[waypoints.clusterID == orig].lat)
+                        p2 = Point(new_waypoints[new_waypoints.clusterID == dest].lon, new_waypoints[new_waypoints.clusterID == dest].lat)
+                        direction = geometry_utils.calculate_initial_compass_bearing(p1, p2)
+                        line = pd.DataFrame([[orig, dest, edge, direction, length, add_passages_from]], 
+                                            columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
+                        waypoint_connections = pd.concat([waypoint_connections, line])
+                drop_IDs.append(merge_nodes[j])
+                #print(waypoint_connections[waypoint_connections['from']==merge_nodes[0]][['from', 'to', 'passages']])
+                #print(waypoint_connections[waypoint_connections['to']==merge_nodes[0]][['from', 'to', 'passages']])
+        mask = ~(waypoint_connections['to'].isin(drop_IDs) | waypoint_connections['from'].isin(drop_IDs))
+        new_waypoint_connections = waypoint_connections[mask]
+        #print(new_waypoint_connections[new_waypoint_connections['from']==9][['from', 'to', 'passages']])
+        #print(new_waypoint_connections[new_waypoint_connections['to']==9][['from', 'to', 'passages']])
+        new_waypoint_connections = gpd.GeoDataFrame(new_waypoint_connections, geometry='geometry', crs=self.crs)
+
+        # make graph from waypoints and waypoint connections
+        # add node features
+        G = nx.DiGraph()
+        for i in range(0, len(new_waypoints)):
+            node_id = new_waypoints['clusterID'].iloc[i]
+            G.add_node(node_id)
+            G.nodes[node_id]['n_members'] = new_waypoints.n_members.iloc[i]
+            G.nodes[node_id]['position'] = (new_waypoints.lon.iloc[i], new_waypoints.lat.iloc[i])  # !changed lat-lon to lon-lat for plotting
+            G.nodes[node_id]['speed'] = new_waypoints.speed.iloc[i]
+            G.nodes[node_id]['cog_before'] = new_waypoints.cog_before.iloc[i]
+            G.nodes[node_id]['cog_after'] = new_waypoints.cog_after.iloc[i]
+        
+        for i in range(0, len(new_waypoint_connections)):
+            orig = new_waypoint_connections['from'].iloc[i]
+            dest = new_waypoint_connections['to'].iloc[i]
+            e = (orig, dest)
+            G.add_edge(*e)
+            G[orig][dest]['weight'] = new_waypoint_connections['passages'].iloc[i]
+            G[orig][dest]['length'] = new_waypoint_connections['length'].iloc[i]
+            G[orig][dest]['direction'] = new_waypoint_connections['direction'].iloc[i]
+            G[orig][dest]['geometry'] = new_waypoint_connections['geometry'].iloc[i]
+            G[orig][dest]['inverse_weight'] = 1/new_waypoint_connections['passages'].iloc[i]
+
+        self.waypoints = new_waypoints
+        self.waypoint_connections = new_waypoint_connections
+        self.G = G
+    
     def prune_graph(self, min_passages):
         '''
         prunes the maritime traffic graph to only contain edges with more passages than min_passages
@@ -253,7 +403,7 @@ class MaritimeTrafficNetwork:
             # find all intersections and close passages of waypoints
             trajectory = self.significant_points_trajectory.get_trajectory(mmsi)
             trajectory_segments = trajectory.to_line_gdf()
-            distances = trajectory.distance(wps.convex_hull)
+            distances = trajectory.distance(wps['convex_hull'])
             mask = distances < max_distance
             close_wps = wps[mask]
             # find temporal order  of waypoint passage
@@ -261,8 +411,8 @@ class MaritimeTrafficNetwork:
             for i in range(0, len(trajectory_segments)):
                 segment = trajectory_segments.iloc[i]
                 # distance of each segment to the selection of close waypoints
-                distance_to_line = segment['geometry'].distance(close_wps.convex_hull)  # distance between line segment and waypoint convex hull     
-                distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps.geometry)  # distance between first point of segment and waypoint centroids (needed for sorting)
+                distance_to_line = segment['geometry'].distance(close_wps['convex_hull'])  # distance between line segment and waypoint convex hull     
+                distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps['geometry'])  # distance between first point of segment and waypoint centroids (needed for sorting)
                 close_wps['distance_to_line'] = distance_to_line.tolist()
                 close_wps['distance_to_origin'] = distance_to_origin.tolist()
                 
@@ -280,15 +430,6 @@ class MaritimeTrafficNetwork:
                 passed_wps.sort_values(by='distance_to_origin', inplace=True)
                 passages.extend(passed_wps['clusterID'].tolist())
 
-                '''
-                # angle between line segment and mean traffic direction in each waypoint
-                WP_cog = geometry_utils.compass_mean(close_wps['cog_before'], close_wps['cog_after'])
-                close_wps['angle'] = np.abs(WP_cog - segment['direction'] + 180) % 360 - 180
-                # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
-                passed_wps = close_wps[(close_wps['distance_to_line']<max_distance) & (close_wps['angle']<max_angle)]
-                passed_wps.sort_values(by='distance_to_origin', inplace=True)
-                passages.extend(passed_wps['clusterID'].tolist())
-                '''
             
             # create edges between subsequent passed waypoints
             if len(passages) > 1:  # subset needs to contain at least 2 waypoints
@@ -365,257 +506,16 @@ class MaritimeTrafficNetwork:
         self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
         
         end = time.time()
-        print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+        print(f'Time elapsed: {(end-start)/60:.2f} minutes')      
 
     def trajectory_to_path(self, trajectory):
         '''
         find the best path along the graph for a given trajectory and evaluate goodness of fit
         :param trajectory: a single MovingPandas Trajectory object
         '''
-        G = self.G_pruned.copy()
+        G = self.G.copy()
         waypoints = self.waypoints.copy()
-        connections = self.waypoint_connections_pruned.copy()
-        points = trajectory.to_point_gdf()
-        mmsi = points.mmsi.unique()[0]
-        
-        ### GET START POINT ###
-        # map trajectory start point to the closest waypoint available
-        orig = points.iloc[0].geometry  # get trajectory start point
-        # find out if trajectory starts in a stop point
-        try:
-            orig_speed = points.iloc[0:5].speed.mean()
-            if orig_speed < 2:
-                orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-                                                                            Point(points.iloc[40].lon, points.iloc[40].lat)) # get initial cog
-                angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
-                #mask = ((waypoints.speed < 2) & (np.abs(angle) < 45))
-                mask = np.abs(angle) < 45
-            else:
-                orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-                                                                            Point(points.iloc[9].lon, points.iloc[9].lat)) # get initial cog
-                angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
-                mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
-        except:
-            orig_speed = points.iloc[0:2].speed.mean()
-            orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-                                                                            Point(points.iloc[1].lon, points.iloc[1].lat)) # get initial cog
-            angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
-            mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
-        distances = orig.distance(waypoints[mask].geometry)
-        masked_idx = np.argmin(distances)
-        orig_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
-        # find trajectory point that is closest to the centroid of the first waypoint
-        # this is where we start measuring
-        orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
-        idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
-        # Now we have found the first waypoint and the first point on the trajectory closest to that waypoint
-        
-        ### GET END POINT ###
-        # map trajectory end point to the closest waypoint available
-        dest = points.iloc[-1].geometry  # get end point
-        try:
-            dest_speed = points.iloc[-5:-1].speed.mean()
-            if dest_speed < 2:
-                mask = (waypoints.speed < 2)
-            else:
-                dest_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[-10].lon, points.iloc[-10].lat), 
-                                                                            Point(points.iloc[-1].lon, points.iloc[-1].lat)) # get initial cog
-                angle = (dest_cog - waypoints.cog_before + 180) % 360 - 180
-                mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
-        except:
-            dest_speed = points.iloc[-3:-1].speed.mean()
-            dest_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[-2].lon, points.iloc[-2].lat), 
-                                                                        Point(points.iloc[-1].lon, points.iloc[-1].lat)) # get initial cog
-            angle = (dest_cog - waypoints.cog_before + 180) % 360 - 180
-            mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
-        distances = dest.distance(waypoints[mask].geometry)
-        masked_idx = np.argmin(distances)
-        dest_WP = waypoints[mask]['clusterID'].iloc[masked_idx]
-        # find trajectory point that is closest to the centroid of the last waypoint
-        # this is where we end measuring
-        dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
-        idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
-        # Now we have found the last waypoint and the last point on the trajectory closest to that waypoint
-        #print(f'start: {orig_WP}, end: {dest_WP}')
-        #print(orig_speed, orig_cog, dest_speed, dest_cog)
-        if orig_WP == dest_WP:
-            print('Origin = Destination')
-            message = 'orig_is_dest'
-        #### Find path between origin and destination
-        # find a path from start to end waypoint
-        path = [orig_WP]
-        current_WP = orig_WP
-        while path[-1] != dest_WP:
-            # Check if a next path segment is available
-            if len(list(G.neighbors(current_WP))) > 0:
-                next_WP = current_WP  # if we don't find a next waypoint, the algorithm will terminate
-                # check if there are any intersections between candidate waypoints and the trajectory
-                candidate_WPs = G.neighbors(current_WP)
-                candidate_WP_hulls = waypoints[waypoints.clusterID.isin(candidate_WPs)]['convex_hull']
-                intersects = trajectory.distance(candidate_WP_hulls)<50
-                # if we found waypoint intersections we look for the next waypoint among them
-                if np.sum(intersects)>0:
-                    #print('Waypoint intersections found. Finding closest neighbor...')
-                    shortest_edge_length = np.inf
-                    # try to find closest waypoint that is intersected by the trajectory and matches in direction
-                    for candidate_WP in G.neighbors(current_WP):
-                        #print(f'Candidate: {candidate_WP}')
-                        # does the trajectory intersect the convex hull of the waypoint candidate?
-                        candidate_WP_hull = waypoints[waypoints.clusterID==candidate_WP]['convex_hull'].item()
-                        intersects = trajectory.distance(candidate_WP_hull)<50
-                        if intersects:
-                            edge_length = G[current_WP][candidate_WP]['length']
-                        
-                            # find trajectory point closest to current waypoint
-                            current_WP_point = waypoints[waypoints.clusterID==current_WP]['geometry'].item()  # get coordinates of waypoint centroid
-                            distances = points.distance(current_WP_point)  
-                            p1_idx = np.argmin(distances)
-                        
-                            # find trajectory point closest to candidate waypoint
-                            candidate_WP_point = waypoints[waypoints.clusterID==candidate_WP]['geometry'].item()  # get coordinates of waypoint centroid
-                            distances = points.iloc[p1_idx:].distance(candidate_WP_point)  
-                            p2_idx = np.argmin(distances) + p1_idx
-                            if (p2_idx - p1_idx) <= 0:
-                                #print('going back is not allowed')
-                                continue
-        
-                            # does the COG of trajectory and waypoint candidate match?
-                            # compute trajectory COG close to candidate waypoint
-                            if p2_idx >= 5:
-                                p2_cog_before = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx-5].lon, points.iloc[p2_idx-5].lat), 
-                                                                                                 Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat))
-                            else:
-                                p2_cog_before = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx-1].lon, points.iloc[p2_idx-1].lat), 
-                                                                                                 Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat))
-                            # caution at the end of the trajectory not to run out of bounds
-                            if len(points)-p2_idx > 5:
-                                p2_cog_after = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat), 
-                                                                                            Point(points.iloc[p2_idx+5].lon, points.iloc[p2_idx+5].lat))
-                            else:
-                                p2_cog_after = p2_cog_before
-                        
-                            # get candidate waypoint traffic direction both before and after waypoint passage
-                            candidate_WP_cog_before = waypoints[waypoints.clusterID==candidate_WP]['cog_before'].item()
-                            candidate_WP_cog_after = waypoints[waypoints.clusterID==candidate_WP]['cog_after'].item()
-                        
-                            # compute angle between trajectory and waypoint candidate
-                            angle_before = (p2_cog_before - candidate_WP_cog_before + 180) % 360 - 180
-                            angle_after = (p2_cog_after - candidate_WP_cog_after + 180) % 360 - 180
-                            #print(intersects, edge_length)
-                            #print(f'trajectory COG: {p2_cog_before:.2f}, WP COG before: {candidate_WP_cog_before:.2f}, angle: {angle_before:.2f}')
-                            #print(f'trajectory COG: {p2_cog_after:.2f}, WP COG after: {candidate_WP_cog_after:.2f}, angle: {angle_after:.2f}')
-                            if ((edge_length < shortest_edge_length) & ((np.abs(angle_before)<30 or np.abs(angle_after)<30))):
-                                next_WP = candidate_WP
-                                shortest_edge_length = edge_length
-                else:
-                    #print('No intersections found. Finding neighbor that minimises distance between trajectory and edge...')
-                    shortest_mean_distance_intersects = np.inf
-                    shortest_mean_distance_non_intersects = np.inf
-                    flag = False
-                    for candidate_WP in G.neighbors(current_WP):
-                        #print(f'Candidate: {candidate_WP}')
-                        # does the candidate have any neighbors that lead back to the trajectory?
-                        candidate_WP_hulls = waypoints[waypoints.clusterID.isin(G.neighbors(candidate_WP))]['convex_hull']
-                        intersects = trajectory.distance(candidate_WP_hulls)<50
-        
-                        # calculate mean distance between the trajectory and the edge between current and candidate waypoint
-                        # get edge between current and candidate waypoint
-                        edge = connections[(connections['from'] == current_WP) & (connections['to'] == candidate_WP)].geometry.item()
-                        # get trajectory segment between the two waypoints
-                        # find trajectory point closest to current waypoint
-                        current_WP_point = waypoints[waypoints.clusterID==current_WP]['geometry'].item()  # get coordinates of waypoint centroid
-                        distances = points.distance(current_WP_point)  
-                        p1_idx = np.argmin(distances)
-                        # find trajectory point closest to candidate waypoint
-                        candidate_WP_point = waypoints[waypoints.clusterID==candidate_WP]['geometry'].item()  # get coordinates of waypoint centroid
-                        distances = points.iloc[p1_idx:].distance(candidate_WP_point)  
-                        p2_idx = np.argmin(distances) + p1_idx
-                        if (p2_idx - p1_idx) <= 0:
-                            #print('going back is not allowed')
-                            continue
-                        # compute mean distance between trajectory segment and edge
-                        mean_distance = points[p1_idx:p2_idx].distance(edge).mean()
-                        # compute trajectory COG close to candidate waypoint
-                        if p2_idx >= 5:
-                            p2_cog_before = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx-5].lon, points.iloc[p2_idx-5].lat), 
-                                                                                             Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat))
-                        else:
-                            p2_cog_before = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx-1].lon, points.iloc[p2_idx-1].lat), 
-                                                                                             Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat))
-                        # caution at the end of the trajectory not to run out of bounds
-                        if len(points)-p2_idx > 5:
-                            p2_cog_after = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[p2_idx].lon, points.iloc[p2_idx].lat), 
-                                                                                            Point(points.iloc[p2_idx+5].lon, points.iloc[p2_idx+5].lat))
-                        else:
-                            p2_cog_after = p2_cog_before
-                        # get candidate waypoint traffic direction both before and after waypoint passage
-                        candidate_WP_cog_before = waypoints[waypoints.clusterID==candidate_WP]['cog_before'].item()
-                        candidate_WP_cog_after = waypoints[waypoints.clusterID==candidate_WP]['cog_after'].item()
-                        angle_before = (p2_cog_before - candidate_WP_cog_before + 180) % 360 - 180
-                        angle_after = (p2_cog_after - candidate_WP_cog_after + 180) % 360 - 180
-        
-                        if np.sum(intersects)>0:
-                            flag=True  # found a point that leads back to path
-                            if ((mean_distance < shortest_mean_distance_intersects) & ((np.abs(angle_before)<90 or np.abs(angle_after)<90))):
-                                next_WP = candidate_WP
-                                shortest_mean_distance_intersects = mean_distance
-                        else:
-                            if ((mean_distance < shortest_mean_distance_non_intersects) & ((np.abs(angle_before)<90 or np.abs(angle_after)<90)) & (flag==False)):
-                                next_WP = candidate_WP
-                                shortest_mean_distance_non_intersects = mean_distance
-                    
-                if next_WP == current_WP:
-                    print('Got stuck. Terminating early...')
-                    message = 'early_termination'
-                    break
-                else:
-                    path.append(next_WP) # append next waypoint to path
-                    G.remove_node(current_WP)  # drop current waypoint from graph to avoid going in circles
-                    current_WP = next_WP
-                    message = 'success'
-                #print(f'Found next waypoint: {next_WP}')
-                #print('==============================================')
-            else:
-                print('No more adjacent waypoints. Terminating...')
-                message = 'no_path'
-                break
-            
-        # make trajectory from path
-        path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
-        for j in range(0, len(path)-1):
-            edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
-            temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
-            path_df = pd.concat([path_df, temp])
-        path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
-        
-        ###########
-        # evaluate goodness of fit
-        ###########
-        eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
-        multi_line = MultiLineString(list(path_df.geometry))
-        edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
-        distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
-        mean_dist = distances.mean()
-        median_dist = distances.median()
-        max_dist = distances.max()
-        evaluation_results = pd.DataFrame({'mmsi':mmsi,
-                                           'mean_dist':mean_dist,
-                                           'median_dist':median_dist,
-                                           'max_dist':max_dist,
-                                           'distances':[distances.tolist()],
-                                           'message':message}
-                                         )       
-        
-        return path_df, evaluation_results      
-
-    def trajectory_to_path2(self, trajectory):
-        '''
-        find the best path along the graph for a given trajectory and evaluate goodness of fit
-        :param trajectory: a single MovingPandas Trajectory object
-        '''
-        G = self.G_pruned.copy()
-        waypoints = self.waypoints.copy()
-        connections = self.waypoint_connections_pruned.copy()
+        connections = self.waypoint_connections.copy()
         points = trajectory.to_point_gdf()
         mmsi = points.mmsi.unique()[0]
         
@@ -624,18 +524,18 @@ class MaritimeTrafficNetwork:
         
         ### GET END POINT ###
         dest_WP, idx_dest = geometry_utils.find_dest_WP(points, waypoints)
+        #print(orig_WP, dest_WP)
         
-        if orig_WP == dest_WP:
-            print('Origin = Destination')
-            message = 'orig_is_dest'
-            path = [orig_WP, dest_WP]
-        else:
+        try:
             # find all waypoints intersected by the trajectory
             passages = geometry_utils.find_WP_intersections(trajectory, waypoints)
             if passages[0] != orig_WP:
                 passages.insert(0, orig_WP)
             if passages[-1] != dest_WP:
                 passages.append(dest_WP)
+            if len(passages)<2:
+                raise Exception
+            #print(passages)
             # find edge sequence between each waypoint pair, that minimizes the distance between trajectory and edge sequence
             path = []
             for i in range(0, len(passages)-1):
@@ -671,32 +571,87 @@ class MaritimeTrafficNetwork:
             flattened_path = [item for sublist in path for item in sublist]
             path = list(dict.fromkeys(flattened_path))
             message = 'success'
+            #print(path)
+    
+            path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+            for j in range(0, len(path)-1):
+                #print(path[j], path[j+1])
+                edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+                temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                path_df = pd.concat([path_df, temp])
+            path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+    
+            ###########
+            # evaluate goodness of fit
+            ###########
+            eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+            multi_line = MultiLineString(list(path_df.geometry))
+            edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+            distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+            mean_dist = distances.mean()
+            median_dist = distances.median()
+            max_dist = distances.max()
+            evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                               'mean_dist':mean_dist,
+                                               'median_dist':median_dist,
+                                               'max_dist':max_dist,
+                                               'distances':[distances.tolist()],
+                                               'message':message}
+                                             )
+            #print(mmsi, ': success')
         
-        #print(path)
-        path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
-        for j in range(0, len(path)-1):
-            edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
-            temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
-            path_df = pd.concat([path_df, temp])
-        path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
-        
-        ###########
-        # evaluate goodness of fit
-        ###########
-        eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
-        multi_line = MultiLineString(list(path_df.geometry))
-        edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
-        distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
-        mean_dist = distances.mean()
-        median_dist = distances.median()
-        max_dist = distances.max()
-        evaluation_results = pd.DataFrame({'mmsi':mmsi,
-                                           'mean_dist':mean_dist,
-                                           'median_dist':median_dist,
-                                           'max_dist':max_dist,
-                                           'distances':[distances.tolist()],
-                                           'message':message}
-                                         )       
+        except:
+            if orig_WP == dest_WP:
+                message = 'orig_is_dest'
+                path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+                evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                   'mean_dist':np.nan,
+                                                   'median_dist':np.nan,
+                                                   'max_dist':np.nan,
+                                                   'distances':[np.nan],
+                                                   'message':message}
+                                                 )
+                #print(mmsi, ': orig_is_dest (no path)')
+            
+            else:
+                try:
+                    path = nx.shortest_path(G, orig_WP, dest_WP)
+                    message = 'attempt'
+                    path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                    for j in range(0, len(path)-1):
+                        edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+                        temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                        path_df = pd.concat([path_df, temp])
+                    path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+                    ###########
+                    # evaluate goodness of fit
+                    ###########
+                    eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+                    multi_line = MultiLineString(list(path_df.geometry))
+                    edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+                    distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+                    mean_dist = distances.mean()
+                    median_dist = distances.median()
+                    max_dist = distances.max()
+                    evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                       'mean_dist':mean_dist,
+                                                       'median_dist':median_dist,
+                                                       'max_dist':max_dist,
+                                                       'distances':[distances.tolist()],
+                                                       'message':message}
+                                                     )
+                    #print(mmsi, ': attempt')
+                except:
+                    message = 'failure'
+                    #print(mmsi, ': failure')
+                    path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+                    evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                       'mean_dist':np.nan,
+                                                       'median_dist':np.nan,
+                                                       'max_dist':np.nan,
+                                                       'distances':[np.nan],
+                                                       'message':message}
+                                                     )
         
         return path_df, evaluation_results
     
@@ -723,6 +678,61 @@ class MaritimeTrafficNetwork:
                 dijkstra_path_df = pd.concat([dijkstra_path_df, temp])
             dijkstra_path_df = gpd.GeoDataFrame(dijkstra_path_df, geometry='geometry', crs=self.crs)
             return dijkstra_path_df
+    
+    def evaluate_graph(self, trajectories):
+        '''
+        given a selection of trajectories, compute evaluation metrics for the graph
+        '''
+        all_paths = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+        all_evaluation_results = pd.DataFrame(columns = ['mmsi', 'mean_dist', 'median_dist', 'max_dist', 'distances', 'message'])
+        n_trajectories = len(trajectories.to_traj_gdf())
+        print(f'Evaluating graph on {n_trajectories} trajectories')
+        print(f'Progress:', end=' ', flush=True)
+        count = 0  # initialize a counter that keeps track of the progress
+        percentage = 0  # percentage of progress
+        for trajectory in trajectories:
+            path, evaluation_results = self.trajectory_to_path(trajectory)
+            all_paths = pd.concat([all_paths, path])
+            all_evaluation_results = pd.concat([all_evaluation_results, evaluation_results])
+            count += 1
+            # report progress
+            if count/n_trajectories > 0.1:
+                count = 0
+                percentage += 10
+                print(f'{percentage}%...', end='', flush=True)
+        print('Done!')
+
+        # plot detailed distance metrics
+        plot_evaluation = all_evaluation_results[all_evaluation_results['message'] != 'orig_is_dest']
+        plt.boxplot(plot_evaluation.distances)
+        plt.title('Distance between trajectory and edge sequence')
+        plt.ylabel('Distance (m)')
+        plt.show()
+
+        # get percentages of success / attempt / orig_is_dest
+        print(all_evaluation_results.groupby('message').count() / len(all_evaluation_results))
+
+        # percentage of trajectories that could not be mapped properly
+        nan_mask = all_evaluation_results.isna().any(axis=1)
+        num_rows_with_nan = all_evaluation_results[nan_mask].shape[0]
+        percentage_nan = num_rows_with_nan/len(all_evaluation_results)
+        print(f'Fraction of NaN results: {percentage_nan*100:.2f}%')
+        
+        mean_distances = all_evaluation_results[~nan_mask]['mean_dist']
+        median_distances = all_evaluation_results[~nan_mask]['median_dist']
+        max_distances = all_evaluation_results[~nan_mask]['max_dist']
+        
+        plt.boxplot([mean_distances, median_distances, max_distances])
+        plt.title('Graph evaluation metrics')
+        plt.xticks([1, 2, 3], ['mean distance', 'median distance', 'max distance'])
+        plt.ylabel('Distance (m)')
+        plt.show()
+        
+        print(f'Median mean distance = {np.median(mean_distances):.2f} m')
+        print(f'Median median distance = {np.median(median_distances):.2f} m')
+        print(f'Median max distance = {np.median(max_distances):.2f} m')
+
+        return all_paths, all_evaluation_results
     
     def map_waypoints(self, detailed_plot=False, center=[59, 5]):
         # plotting

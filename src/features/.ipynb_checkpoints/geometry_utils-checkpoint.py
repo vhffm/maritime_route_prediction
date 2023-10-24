@@ -68,11 +68,11 @@ def find_orig_WP(points, waypoints):
     try:
         orig_speed = points.iloc[0:5].speed.mean()
         if orig_speed < 2:
-            orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-                                                         Point(points.iloc[40].lon, points.iloc[40].lat)) # get initial cog
-            angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
-            mask = ((waypoints.speed < 2) & (np.abs(angle) < 45))
-            #mask = np.abs(angle) < 45
+            #orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+            #                                             Point(points.iloc[40].lon, points.iloc[40].lat)) # get initial cog
+            #angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
+            #mask = ((waypoints.speed < 2) & (np.abs(angle) < 45))
+            mask = (waypoints.speed < 2)
         else:
             orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
                                                          Point(points.iloc[9].lon, points.iloc[9].lat)) # get initial cog
@@ -80,8 +80,8 @@ def find_orig_WP(points, waypoints):
             mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
     except:
         orig_speed = points.iloc[0:2].speed.mean()
-        orig_cog = geometry_utils.calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-                                                                        Point(points.iloc[1].lon, points.iloc[1].lat)) # get initial cog
+        orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
+                                                    Point(points.iloc[1].lon, points.iloc[1].lat)) # get initial cog
         angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
         mask = np.abs(angle) < 45  # only consider waypoints that have similar direction
     distances = orig.distance(waypoints[mask].geometry)
@@ -138,8 +138,8 @@ def find_WP_intersections(trajectory, waypoints):
     for i in range(0, len(trajectory_segments)-1):
         segment = trajectory_segments.iloc[i]
         # distance of each segment to the selection of close waypoints
-        distance_to_line = segment['geometry'].distance(close_wps.convex_hull)  # distance between line segment and waypoint convex hull  
-        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps.geometry)  # distance between first point of segment and waypoint centroids (needed for sorting)
+        distance_to_line = segment['geometry'].distance(close_wps['convex_hull'])  # distance between line segment and waypoint convex hull  
+        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps['geometry'])  # distance between first point of segment and waypoint centroids (needed for sorting)
         close_wps['distance_to_line'] = distance_to_line.tolist()
         close_wps['distance_to_origin'] = distance_to_origin.tolist()
         # angle between line segment and mean traffic direction in each waypoint
@@ -154,6 +154,7 @@ def find_WP_intersections(trajectory, waypoints):
                 (np.abs(close_wps['angle_before'])<max_angle) & 
                 (np.abs(close_wps['angle_after'])<max_angle))
         passed_wps = close_wps[mask]
+        #print(close_wps[['clusterID', 'distance_to_line', 'angle_before', 'angle_after']])
         passed_wps.sort_values(by='distance_to_origin', inplace=True)
         passages.extend(passed_wps['clusterID'].tolist())
     

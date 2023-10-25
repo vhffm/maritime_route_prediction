@@ -355,29 +355,33 @@ class MaritimeTrafficNetwork:
     
     def prune_graph(self, min_passages):
         '''
-        prunes the maritime traffic graph to only contain edges with more passages than min_passages
+        pruned the traffic graph. If an edge between nodes u and v has a weight<min_passages, 
+        the edge is removed when there is an alternative path between u and v
         '''
-        A = nx.to_scipy_sparse_array(self.G, format='coo')
-        mask = A.data >= min_passages
-        A_pruned = coo_matrix((A.data[mask], (A.row[mask], A.col[mask])), shape=A.shape)
-        G_pruned = nx.from_scipy_sparse_array(A_pruned, create_using=nx.DiGraph)
-        G_pruned.nodes = self.G.nodes
-        self.waypoint_connections_pruned = self.waypoint_connections[self.waypoint_connections.passages >= min_passages]
-        # add edge features
-        for i in range(0, len(self.waypoint_connections_pruned)):
-            orig = self.waypoint_connections_pruned['from'].iloc[i]
-            dest = self.waypoint_connections_pruned['to'].iloc[i]
-            G_pruned[orig][dest]['length'] = self.waypoint_connections_pruned['length'].iloc[i]
-            G_pruned[orig][dest]['direction'] = self.waypoint_connections_pruned['direction'].iloc[i]
-            G_pruned[orig][dest]['geometry'] = self.waypoint_connections_pruned['geometry'].iloc[i]
-            G_pruned[orig][dest]['inverse_weight'] = 1/self.waypoint_connections['passages'].iloc[i]
-        self.G_pruned = G_pruned
+        G_pruned = self.G.copy()
+        G_temp = self.G.copy()
+        connections_pruned = self.waypoint_connections.copy()
+
+        edges_to_remove = []
+        for u, v in G_pruned.edges():
+            if G_pruned[u][v]['weight'] < min_passages:
+                G_temp.remove_edge(u, v)
+                if nx.has_path(G_temp, u, v):
+                    edges_to_remove.append((u, v))
+    
+        # Actually remove the edges after iterating through all of them
+        for u, v in edges_to_remove:
+            G_pruned.remove_edge(u, v)
+            connections_pruned = connections_pruned[~((connections_pruned['from'] == u) & (connections_pruned['to'] == v))]
+
         print('------------------------')
         print(f'Pruned Graph:')
         print(f'Number of nodes: {G_pruned.number_of_nodes()} ({nx.number_of_isolates(G_pruned)} isolated)')
         print(f'Number of edges: {G_pruned.number_of_edges()}')
         print('------------------------')
-    
+        
+        self.G_pruned = G_pruned
+        self.waypoint_connections_pruned = connections_pruned  
 
     def make_graph_from_waypoints(self, max_distance=10, max_angle=45):
         '''
@@ -513,9 +517,9 @@ class MaritimeTrafficNetwork:
         find the best path along the graph for a given trajectory and evaluate goodness of fit
         :param trajectory: a single MovingPandas Trajectory object
         '''
-        G = self.G.copy()
+        G = self.G_pruned.copy()
         waypoints = self.waypoints.copy()
-        connections = self.waypoint_connections.copy()
+        connections = self.waypoint_connections_pruned.copy()
         points = trajectory.to_point_gdf()
         mmsi = points.mmsi.unique()[0]
         
@@ -702,13 +706,6 @@ class MaritimeTrafficNetwork:
                 print(f'{percentage}%...', end='', flush=True)
         print('Done!')
 
-        # plot detailed distance metrics
-        plot_evaluation = all_evaluation_results[all_evaluation_results['message'] != 'orig_is_dest']
-        plt.boxplot(plot_evaluation.distances)
-        plt.title('Distance between trajectory and edge sequence')
-        plt.ylabel('Distance (m)')
-        plt.show()
-
         # get percentages of success / attempt / orig_is_dest
         print(all_evaluation_results.groupby('message').count() / len(all_evaluation_results))
 
@@ -717,6 +714,13 @@ class MaritimeTrafficNetwork:
         num_rows_with_nan = all_evaluation_results[nan_mask].shape[0]
         percentage_nan = num_rows_with_nan/len(all_evaluation_results)
         print(f'Fraction of NaN results: {percentage_nan*100:.2f}%')
+
+        # plot detailed distance metrics
+        plot_evaluation = all_evaluation_results[~nan_mask]
+        plt.boxplot(plot_evaluation.distances)
+        plt.title('Distance between trajectory and edge sequence')
+        plt.ylabel('Distance (m)')
+        plt.show()
         
         mean_distances = all_evaluation_results[~nan_mask]['mean_dist']
         median_distances = all_evaluation_results[~nan_mask]['median_dist']

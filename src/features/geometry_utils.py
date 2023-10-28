@@ -90,9 +90,11 @@ def find_orig_WP(points, waypoints):
     # find trajectory point that is closest to the centroid of the first waypoint
     # this is where we start measuring
     orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
+    orig_WP_hull = waypoints[waypoints.clusterID==orig_WP]['convex_hull'].item()
     idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
+    dist_orig = orig_WP_hull.distance(orig)
     
-    return orig_WP, idx_orig
+    return orig_WP, idx_orig, dist_orig
 
 def find_dest_WP(points, waypoints):
     dest = points.iloc[-1].geometry  # get end point
@@ -117,8 +119,11 @@ def find_dest_WP(points, waypoints):
     # find trajectory point that is closest to the centroid of the last waypoint
     # this is where we end measuring
     dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
+    dest_WP_hull = waypoints[waypoints.clusterID==dest_WP]['convex_hull'].item()
     idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
-    return dest_WP, idx_dest
+    dist_dest = dest_WP_hull.distance(dest)
+    
+    return dest_WP, idx_dest, dist_dest
 
 def find_WP_intersections(trajectory, waypoints):
     '''

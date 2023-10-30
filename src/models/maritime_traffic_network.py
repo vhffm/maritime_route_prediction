@@ -898,9 +898,9 @@ class MaritimeTrafficNetwork:
         eastbound = connections[(connections.direction < 180)]
         westbound = connections[(connections.direction >= 180)]
         map = westbound.explore(m=map, name='westbound graph edges', legend=False,
-                                style_kwds={'weight':2, 'color':'red', 'opacity':0.7})
+                                style_kwds={'weight':1, 'color':'red', 'opacity':0.7})
         map = eastbound.explore(m=map, name='eastbound graph edges', legend=False,
-                                style_kwds={'weight':2, 'color':'green', 'opacity':0.7})
+                                style_kwds={'weight':1, 'color':'green', 'opacity':0.7})
         return map
     
     def plot_graph_canvas(self):

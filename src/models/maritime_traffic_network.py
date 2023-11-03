@@ -563,7 +563,7 @@ class MaritimeTrafficNetwork:
 
         ### GET ALL INTERSECTIONS between trajectory and waypoints
         passages = geometry_utils.find_WP_intersections(trajectory, waypoints)
-        #print('Intersections found:', passages)
+        print('Intersections found:', passages)
         
         # Distinguish three cases
         # 1. passages is empty and orig != dest
@@ -613,14 +613,14 @@ class MaritimeTrafficNetwork:
                         passages[i+1]=passages[i]
                         continue
                     #print('From:', passages[i], ' To:', passages[i+1])
-                    edge_sequences = nx.all_shortest_paths(G, passages[i], passages[i+1])
-                    #print('=======================')
-                    #print(f'Iterating through edge sequences')
+                    edge_sequences = nx.all_simple_paths(G, passages[i], passages[i+1], cutoff=5)
+                    print('=======================')
+                    print(f'Iterating through edge sequences')
                     min_mean_distance = np.inf
                     # iterate over all possible shortest connections
                     for edge_sequence in edge_sequences:
                         # create a linestring from the edge sequence
-                        #print('Edge sequence:', edge_sequence)
+                        print('Edge sequence:', edge_sequence)
                         multi_line = []
                         for j in range(0, len(edge_sequence)-1):
                             line = connections[(connections['from'] == edge_sequence[j]) & (connections['to'] == edge_sequence[j+1])].geometry.item()
@@ -640,9 +640,18 @@ class MaritimeTrafficNetwork:
                         eval_points = points.iloc[idx1:idx2+1]  # trajectory points associated with the edge sequence
                         distances = eval_points.distance(multi_line)  # distance between each trajectory point and the edge sequence
                         mean_distance = np.mean(distances)
+                        ###### EXPERIMENTAL
+                        if idx2>idx1:
+                            sequence_length = multi_line.length
+                            t1 = points.index[idx1]
+                            t2 = points.index[idx2]
+                            segment_length = trajectory.get_linestring_between(t1, t2).length
+                            factor = sequence_length/segment_length
+                            mean_distance = mean_distance*factor
+                        ###############
                         #print('distances:', distances)
-                        #print('Sequence:', edge_sequence)
-                        #print('Mean distance:', mean_distance)
+                        print('Sequence:', edge_sequence)
+                        print('Mean distance:', mean_distance)
                         # when mean distance is smaller than any mean distance encoutered before --> save current edge sequence as best edge sequence
                         if mean_distance < min_mean_distance:
                             min_mean_distance = mean_distance
@@ -683,9 +692,261 @@ class MaritimeTrafficNetwork:
                 t2 = points.index[idx_dest]
                 try:
                     percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
+                    length_ratio = edge_sequence.length / trajectory.get_linestring_between(t1, t2).length
                 except:
                     percentage_covered = 1
-                length_ratio = edge_sequence.length / trajectory.get_length()
+                    length_ratio = edge_sequence.length / trajectory.get_length()
+                #print('Length ratio:', length_ratio)
+                distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+                # punishing 'wiggly' edge sequences
+                if length_ratio > 1:
+                    distances = distances*length_ratio
+                mean_dist = distances.mean()  # compute mean distance
+                median_dist = distances.median()  # compute median distance
+                max_dist = distances.max()  # compute max_distance
+                evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                   'mean_dist':mean_dist,
+                                                   'median_dist':median_dist,
+                                                   'max_dist':max_dist,
+                                                   'distances':[distances.tolist()],
+                                                   'fraction_covered':percentage_covered,
+                                                   'length ratio': length_ratio,
+                                                   'message':message}
+                                                 )
+                #print(mmsi, ': success')
+                
+            # In some cases the above algorithm gets stuck in waypoints without any connections leading to the next waypoint
+            # In this case we attempt to find the shortest path between origin and destination
+            except:
+                # if a path exists, we compute it
+                if nx.has_path(G, passages[0], passages[-1]):
+                    path = nx.shortest_path(G, passages[0], passages[-1])
+                    message = 'attempt'
+                    # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
+                    path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                    for j in range(0, len(path)-1):
+                        edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+                        temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                        path_df = pd.concat([path_df, temp])
+                    path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+            
+                    ###########
+                    # evaluate goodness of fit
+                    ###########
+                    eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+                    multi_line = MultiLineString(list(path_df.geometry))
+                    edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+                    distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+                    mean_dist = distances.mean()
+                    median_dist = distances.median()
+                    max_dist = distances.max()
+                    t1 = points.index[idx_orig]
+                    t2 = points.index[idx_dest]
+                    try:
+                        percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
+                    except:
+                        percentage_covered = 1
+                    #percentage_covered = len(eval_points) / len(points)
+                    evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                       'mean_dist':mean_dist,
+                                                       'median_dist':median_dist,
+                                                       'max_dist':max_dist,
+                                                       'distances':[distances.tolist()],
+                                                       'fraction_covered':percentage_covered,
+                                                       'message':message}
+                                                     )
+                # If there is no path between origin and destination, we cannot map the trajectory to an edge sequence
+                else:
+                    message = 'no_path'
+                    path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+                    evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                       'mean_dist':np.nan,
+                                                       'median_dist':np.nan,
+                                                       'max_dist':np.nan,
+                                                       'distances':[np.nan],
+                                                       'fraction_covered':0,
+                                                       'message':message}
+                                                     )
+        
+        # When there are no intersections with any waypoints, we cannot map the trajectory to an edge sequence
+        else:
+            #print('Not enough intersections found. Cannot map trajectory to graph...')
+            message = 'no_intersects'
+            #print(mmsi, ': failure')
+            path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+            evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                               'mean_dist':np.nan,
+                                               'median_dist':np.nan,
+                                               'max_dist':np.nan,
+                                               'distances':[np.nan],
+                                               'fraction_covered':0,
+                                               'message':message}
+                                             )
+        return path_df, evaluation_results
+
+    def trajectory_to_path_dijkstra(self, trajectory):
+        '''
+        Find the best path along the graph for a given trajectory and evaluate goodness of fit
+        The algorithm contains the following steps:
+        1. Find suitable waypoint close to the origin of the trajectory
+        2. Find suitable waypoint close to the destination of the trajectory
+        3. Find all waypoints passed by the trajectory
+        :param trajectory: a single MovingPandas Trajectory object
+        returns:
+        :GeoDataFrame path_df: contains the sequence of edges traversed by a vessel which is closest to its original trajectory
+        :DataFrame evaluation_results: contains metrics for the 'goodness of fit'
+        '''
+        G = self.G_pruned.copy()
+        waypoints = self.waypoints.copy()
+        connections = self.waypoint_connections_pruned.copy()
+        points = trajectory.to_point_gdf()
+        mmsi = points.mmsi.unique()[0]
+        #print('=======================')
+        #print(mmsi)
+        #print('=======================')
+        
+        ### GET potential START POINT ###
+        orig_WP, idx_orig, dist_orig = geometry_utils.find_orig_WP(points, waypoints)
+        
+        ### GET potential END POINT ###
+        dest_WP, idx_dest, dist_dest = geometry_utils.find_dest_WP(points, waypoints)
+        #print('Potential start and end point:', orig_WP, dest_WP)
+
+        ### GET ALL INTERSECTIONS between trajectory and waypoints
+        passages = geometry_utils.find_WP_intersections(trajectory, waypoints)
+        print('Intersections found:', passages)
+        
+        # Distinguish three cases
+        # 1. passages is empty and orig != dest
+        if ((len(passages) == 0) & (orig_WP != dest_WP)):
+            if dist_orig < 100:
+                passages.append(orig_WP)
+            if dist_dest < 100:
+                passages.append(dest_WP)
+        # 2. passages is empty and orig == dest --> nothing we can do here
+        elif ((len(passages) == 0) & (orig_WP == dest_WP)):
+            passages = []
+        # 3. found passages
+        else:
+            # if the potential start waypoint is not in the list of intersections, but close to the origin of the trajectory, add it to the set of passages
+            if ((orig_WP not in passages) & (dist_orig < 100)):
+                passages.insert(0, orig_WP)
+            else:
+                orig_WP = passages[0]
+                orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
+                idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
+            
+            # if the potential destination waypoint is not in the list of intersections, but close to the destination of the trajectory, add it to the set of passages
+            if ((dest_WP not in passages) & (dist_dest < 100)):
+                passages.append(dest_WP)
+            else:
+                dest_WP = passages[-1]
+                dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
+                idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
+        
+        if len(passages) >= 2:
+            try:
+                #print('Executing try statement')
+                path = []  # initialize the best edge sequence traversed by the vessel
+                # find the edge sequence between each waypoint pair, that MINIMIZES THE DISTANCE between trajectory and edge sequence
+                for i in range(0, len(passages)-1):
+                    # find all possible shortest connections between two waypoints
+                    # check if we are going backwards
+                    WP1 = waypoints[waypoints.clusterID==passages[i]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                    WP2 = waypoints[waypoints.clusterID==passages[i+1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                    idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                    idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                    # if we are going backwards, skip to next WP
+                    #print('Point indices:', idx1, idx2)
+                    #print('From:', passages[i], ' To:', passages[i+1])
+                    if idx2 < idx1:
+                        #print('going back is not allowed!')
+                        passages[i+1]=passages[i]
+                        continue
+                    #print('From:', passages[i], ' To:', passages[i+1])
+                    edge_sequences = nx.all_simple_paths(G, passages[i], passages[i+1], cutoff=5)
+                    print('=======================')
+                    print(f'Iterating through edge sequences')
+                    min_mean_distance = np.inf
+                    # iterate over all possible shortest connections
+                    for edge_sequence in edge_sequences:
+                        # create a linestring from the edge sequence
+                        print('Edge sequence:', edge_sequence)
+                        multi_line = []
+                        for j in range(0, len(edge_sequence)-1):
+                            line = connections[(connections['from'] == edge_sequence[j]) & (connections['to'] == edge_sequence[j+1])].geometry.item()
+                            multi_line.append(line)
+                        multi_line = MultiLineString(multi_line)
+                        multi_line = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+                        # measure distance between the multi_line and the trajectory
+                        WP1 = waypoints[waypoints.clusterID==edge_sequence[0]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                        WP2 = waypoints[waypoints.clusterID==edge_sequence[-1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                        idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                        idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                        #print('Point indices:', idx1, idx2)
+                        # Check if we are moving backwards
+                        if idx2 < idx1:
+                            #print('going back is not allowed! (inner)')
+                            continue
+                        eval_points = points.iloc[idx1:idx2+1]  # trajectory points associated with the edge sequence
+                        distances = eval_points.distance(multi_line)  # distance between each trajectory point and the edge sequence
+                        mean_distance = np.mean(distances)
+                        ###### EXPERIMENTAL
+                        if idx2>idx1:
+                            sequence_length = multi_line.length
+                            t1 = points.index[idx1]
+                            t2 = points.index[idx2]
+                            segment_length = trajectory.get_linestring_between(t1, t2).length
+                            factor = sequence_length/segment_length
+                            mean_distance = mean_distance*factor
+                        ###############
+                        #print('distances:', distances)
+                        print('Sequence:', edge_sequence)
+                        print('Mean distance:', mean_distance)
+                        # when mean distance is smaller than any mean distance encoutered before --> save current edge sequence as best edge sequence
+                        if mean_distance < min_mean_distance:
+                            min_mean_distance = mean_distance
+                            best_sequence = edge_sequence
+                    path.append(best_sequence)
+                    #print('----------------------')
+                # delete duplicates from path
+                flattened_path = [item for sublist in path for item in sublist]
+                temp = [flattened_path[0]]
+                for i in range(1, len(flattened_path)):
+                    if flattened_path[i] != flattened_path[i-1]:
+                        temp.append(flattened_path[i])
+                path = temp
+                message = 'success'
+                #print(mmsi, nx.is_path(G, path))
+                #print('Found path:', path)
+        
+                # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
+                path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                for j in range(0, len(path)-1):
+                    #print(path[j], path[j+1])
+                    edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+                    temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                    path_df = pd.concat([path_df, temp])
+                path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+        
+                ###########
+                # evaluate goodness of fit
+                ###########
+                if idx_orig >= idx_dest:  # In some cases this is needed, for example for roundtrips of ferries
+                    idx_orig = 0
+                    idx_dest = -1
+                eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+                multi_line = MultiLineString(list(path_df['geometry']))
+                edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+                # compute the fraction of trajectory that can be associate with an edge sequence
+                t1 = points.index[idx_orig]
+                t2 = points.index[idx_dest]
+                try:
+                    percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
+                    length_ratio = edge_sequence.length / trajectory.get_linestring_between(t1, t2).length
+                except:
+                    percentage_covered = 1
+                    length_ratio = edge_sequence.length / trajectory.get_length()
                 #print('Length ratio:', length_ratio)
                 distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
                 # punishing 'wiggly' edge sequences

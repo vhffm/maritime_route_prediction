@@ -563,7 +563,7 @@ class MaritimeTrafficNetwork:
 
         ### GET ALL INTERSECTIONS between trajectory and waypoints
         passages = geometry_utils.find_WP_intersections(trajectory, waypoints)
-        #print('Intersections found:', passages)
+        print('Intersections found:', passages)
         
         # Distinguish three cases
         # 1. passages is empty and orig != dest
@@ -613,14 +613,14 @@ class MaritimeTrafficNetwork:
                         passages[i+1]=passages[i]
                         continue
                     #print('From:', passages[i], ' To:', passages[i+1])
-                    edge_sequences = nx.all_shortest_paths(G, passages[i], passages[i+1])
-                    #print('=======================')
-                    #print(f'Iterating through edge sequences')
+                    edge_sequences = nx.all_simple_paths(G, passages[i], passages[i+1], cutoff=5)
+                    print('=======================')
+                    print(f'Iterating through edge sequences')
                     min_mean_distance = np.inf
                     # iterate over all possible shortest connections
                     for edge_sequence in edge_sequences:
                         # create a linestring from the edge sequence
-                        #print('Edge sequence:', edge_sequence)
+                        print('Edge sequence:', edge_sequence)
                         multi_line = []
                         for j in range(0, len(edge_sequence)-1):
                             line = connections[(connections['from'] == edge_sequence[j]) & (connections['to'] == edge_sequence[j+1])].geometry.item()
@@ -640,9 +640,18 @@ class MaritimeTrafficNetwork:
                         eval_points = points.iloc[idx1:idx2+1]  # trajectory points associated with the edge sequence
                         distances = eval_points.distance(multi_line)  # distance between each trajectory point and the edge sequence
                         mean_distance = np.mean(distances)
+                        ###### EXPERIMENTAL
+                        if idx2>idx1:
+                            sequence_length = multi_line.length
+                            t1 = points.index[idx1]
+                            t2 = points.index[idx2]
+                            segment_length = trajectory.get_linestring_between(t1, t2).length
+                            factor = sequence_length/segment_length
+                            mean_distance = mean_distance*factor
+                        ###############
                         #print('distances:', distances)
-                        #print('Sequence:', edge_sequence)
-                        #print('Mean distance:', mean_distance)
+                        print('Sequence:', edge_sequence)
+                        print('Mean distance:', mean_distance)
                         # when mean distance is smaller than any mean distance encoutered before --> save current edge sequence as best edge sequence
                         if mean_distance < min_mean_distance:
                             min_mean_distance = mean_distance
@@ -683,9 +692,10 @@ class MaritimeTrafficNetwork:
                 t2 = points.index[idx_dest]
                 try:
                     percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
+                    length_ratio = edge_sequence.length / trajectory.get_linestring_between(t1, t2).length
                 except:
                     percentage_covered = 1
-                length_ratio = edge_sequence.length / trajectory.get_length()
+                    length_ratio = edge_sequence.length / trajectory.get_length()
                 #print('Length ratio:', length_ratio)
                 distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
                 # punishing 'wiggly' edge sequences

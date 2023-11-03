@@ -148,7 +148,7 @@ def find_WP_intersections(trajectory, waypoints):
     '''
     given a trajectory, find all waypoint intersections in the correct order
     '''
-    max_distance = 10 #50
+    max_distance = 50
     max_angle = 30
     
     # simplify trajectory

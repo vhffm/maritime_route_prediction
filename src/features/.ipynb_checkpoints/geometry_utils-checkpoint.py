@@ -59,6 +59,25 @@ def compass_mean(bearings1, bearings2):
 
     return mean_bearing
 
+def mean_bearing(compass_bearings):
+    '''
+    computes the mean of a list of compass bearings in degrees
+    input: list of compass bearings in degrees (0-360)
+    output: mean compass bearing
+    '''
+    # Assuming compass_bearings is a numpy array of compass bearings in degrees
+    compass_bearings_rad = np.radians(compass_bearings)  # Convert to radians
+    
+    # Convert to unit vectors
+    unit_vectors = np.column_stack((np.cos(compass_bearings_rad), np.sin(compass_bearings_rad)))
+    
+    # Calculate the mean vector
+    mean_vector = np.mean(unit_vectors, axis=0)
+    
+    # Convert mean vector back to compass bearing
+    mean_bearing = (np.degrees(np.arctan2(mean_vector[1], mean_vector[0])) + 360) % 360
+    return mean_bearing
+
 def find_orig_WP(points, waypoints):
     '''
     Given a trajectory, find the closest waypoint to the start of the trajectory
@@ -129,12 +148,14 @@ def find_WP_intersections(trajectory, waypoints):
     '''
     given a trajectory, find all waypoint intersections in the correct order
     '''
-    max_distance = 50
+    max_distance = 10 #50
     max_angle = 30
-    # simplofy trajectory
+    
+    # simplify trajectory
     simplified_trajectory = mpd.DouglasPeuckerGeneralizer(trajectory).generalize(tolerance=10)
     simplified_trajectory.add_direction()
     trajectory_segments = simplified_trajectory.to_line_gdf()
+    
     # filter waypoints: only consider waypoints within a certain distance to the trajectory
     distances = trajectory.distance(waypoints['convex_hull'])
     mask = distances < max_distance
@@ -160,9 +181,10 @@ def find_WP_intersections(trajectory, waypoints):
                 (np.abs(close_wps['angle_after'])<max_angle))
         passed_wps = close_wps[mask]
         #print(close_wps[['clusterID', 'distance_to_line', 'angle_before', 'angle_after']])
+        # ensure correct ordering of waypoint passages
         passed_wps.sort_values(by='distance_to_origin', inplace=True)
         passages.extend(passed_wps['clusterID'].tolist())
-    
+        
     return list(OrderedDict.fromkeys(passages))
 
 def LEGACY_aggregate_edges(waypoints, waypoint_connections):

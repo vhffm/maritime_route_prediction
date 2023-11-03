@@ -170,8 +170,8 @@ class MaritimeTrafficNetwork:
             x = significant_points[clustering.labels_ == i].x.mean()
             y = significant_points[clustering.labels_ == i].y.mean()
             speed = significant_points[clustering.labels_ == i].speed.mean()
-            cog_before = significant_points[clustering.labels_ == i].cog_before.mean()
-            cog_after = significant_points[clustering.labels_ == i].cog_after.mean()     
+            cog_before = geometry_utils.mean_bearing(significant_points[clustering.labels_ == i].cog_before.tolist())
+            cog_after = geometry_utils.mean_bearing(significant_points[clustering.labels_ == i].cog_after.tolist())
             n_members = len(significant_points[clustering.labels_ == i])
             centroid = pd.DataFrame([[i, lat, lon, x, y, speed, cog_before, cog_after, n_members]], 
                                     columns=['clusterID', 'lat', 'lon', 'x', 'y', 
@@ -195,6 +195,8 @@ class MaritimeTrafficNetwork:
         for i in range(0, max(clustering.labels_)+1):
             hull = significant_points[significant_points.clusterID == i].unary_union.convex_hull
             cluster_centroids['convex_hull'].iloc[i] = hull
+        
+        # print results
         print(f'{len(cluster_centroids)} clusters detected')
         end = time.time()  # end timer
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
@@ -211,16 +213,19 @@ class MaritimeTrafficNetwork:
         stop_points = waypoints[waypoints['speed'] < max_speed]
         columns = stop_points.columns.tolist()
         columns.append('members')
-        merged_stop_points = pd.DataFrame(columns=columns)
-        drop_IDs = []
+        merged_stop_points = pd.DataFrame(columns=columns)  # new DataFrame containing the merged stop points
+        drop_IDs = []  # list of waypoint IDs that will be dropped, because they were merged
+        # iterate over all stop points
         for i in range(0, len(stop_points)):
             current_stop_point = stop_points.iloc[i]
+            # find other stop points that intersect with the current stop point
             mask = current_stop_point['convex_hull'].intersects(stop_points['convex_hull'])
             intersect_stop_points = stop_points[mask]
             members = intersect_stop_points['clusterID'].unique()
-            drop_IDs.append(members.tolist())
-            convex_hull = ops.unary_union(intersect_stop_points['convex_hull'])
-            clusterID = members[0]
+            drop_IDs.append(members.tolist())  # add IDs of redundant stop points to list
+            convex_hull = ops.unary_union(intersect_stop_points['convex_hull'])  # merge the convex hulls of intersecting stop points
+            clusterID = members[0]  # assign the ID of the first stop point as new ID for the merged stop point
+            # get merged stop point attributes
             lat = current_stop_point['lat']
             lon = current_stop_point['lon']
             x = current_stop_point['x']
@@ -228,54 +233,51 @@ class MaritimeTrafficNetwork:
             speed = intersect_stop_points['speed'].mean()
             n_members = intersect_stop_points['n_members'].sum()
             geometry = Point(x, y)
+            # if the stop point does not exist yet, append it to a new DataFrame with merged stop points
             if clusterID not in merged_stop_points['clusterID'].unique():
                 line = pd.DataFrame([[clusterID, lat, lon, x, y, speed, 0, 0, n_members, convex_hull, geometry, members]], 
-                                    columns=columns)
+                                    columns=columns)  # we set the course in the stop point to 0, as it does not matter
                 merged_stop_points = pd.concat([merged_stop_points, line])
         merged_stop_points = gpd.GeoDataFrame(merged_stop_points, geometry='geometry', crs=self.crs)
         
-        # adjust waypoints
+        # drop all stop points from waypoints DataFrame
         drop_IDs = set(item for sublist in drop_IDs for item in sublist)
         drop_IDs = list(drop_IDs)
         mask = ~waypoints['clusterID'].isin(drop_IDs)
         new_waypoints = waypoints[mask]
+        # append merged stop points to waypoints DataFrame
         new_waypoints = pd.concat([new_waypoints, merged_stop_points[new_waypoints.columns]])
         new_waypoints = gpd.GeoDataFrame(new_waypoints, geometry='geometry', crs=self.crs)
         
         # adjust waypoint connections
         waypoint_connections = self.waypoint_connections.copy()
         drop_IDs = []
+        # for each merged stop point, assign all connections from and to original stop points
         for i in range(0, len(merged_stop_points)):
             merged_stop_point = merged_stop_points.iloc[i]
             merge_nodes = merged_stop_point['members']
-            #print('==================')
-            #print(waypoint_connections[waypoint_connections['from']==merge_nodes[0]][['from', 'to', 'passages']])
-            #print(waypoint_connections[waypoint_connections['to']==merge_nodes[0]][['from', 'to', 'passages']])
-            #print('Merge nodes:', merge_nodes)
+            # iterate over all stop points that compose the merged stop point
             for j in range(1, len(merge_nodes)):
-                #print('Current merge node: ', merge_nodes[j])
                 # outgoing connections
-                from_connections = waypoint_connections[waypoint_connections['from']==merge_nodes[j]]
-                #print(from_connections[['from', 'to', 'passages']])
+                from_connections = waypoint_connections[waypoint_connections['from']==merge_nodes[j]]  # all outgoing connections of the original stop point
+                # iterate over all outgoing connections
                 for k in range(0, len(from_connections)):
-                    #print('Current "to" node: ', from_connections['to'].iloc[k])
-                    add_passages_from = from_connections['passages'].iloc[k]
+                    add_passages_from = from_connections['passages'].iloc[k]  # number of passages through that connection
                     # no self loops
                     if merge_nodes[0] == from_connections['to'].iloc[k]:
                         continue
                     mask = ((waypoint_connections['from']==merge_nodes[0]) &
                            (waypoint_connections['to']==from_connections['to'].iloc[k]))
+                    # if connection already exists: add the number of passages to that connection
                     if len(waypoint_connections[mask]) > 0:
-                        #print(f'Increasing edge weight from {merge_nodes[0]} to {from_connections["to"].iloc[k]}')
                         waypoint_connections[mask]['passages'] += add_passages_from
+                    # if the connection does not exist: add new connection
                     else:
                         # add linestring as edge
-                        #print(f'Adding new edge from {merge_nodes[0]} to {from_connections["to"].iloc[k]}')
                         orig = merge_nodes[0]
                         dest = from_connections['to'].iloc[k]
                         p1 = new_waypoints[new_waypoints.clusterID == orig]['geometry']
                         p2 = waypoints[waypoints.clusterID == dest]['geometry']
-                        #print(p1, p2)
                         edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
                         length = edge.length
                         # compute the orientation fo the edge (COG)
@@ -288,26 +290,24 @@ class MaritimeTrafficNetwork:
                 
                 #incoming connections
                 to_connections = waypoint_connections[waypoint_connections['to']==merge_nodes[j]]
-                #print(to_connections[['from', 'to', 'passages']])
+                # iterate over all incoming connections
                 for k in range(0, len(to_connections)):
-                    #print('Current "from" node: ', to_connections['from'].iloc[k])
-                    add_passages_to = to_connections['passages'].iloc[k]
+                    add_passages_to = to_connections['passages'].iloc[k]  # number of passages through that connection
                     # no self loops
                     if merge_nodes[0] == to_connections['from'].iloc[k]:
                         continue
                     mask = ((waypoint_connections['to']==merge_nodes[0]) &
                            (waypoint_connections['from']==to_connections['from'].iloc[k]))
+                    # if connection already exists: add the number of passages to that connection
                     if  len(waypoint_connections[mask]) > 0:
-                        #print(f'Increasing edge weight from {to_connections["to"].iloc[k]} to {merge_nodes[0]}')
                         waypoint_connections[mask]['passages'] += add_passages_to
+                    # if the connection does not exist: add new connection
                     else:
                         # add linestring as edge
-                        #print(f'Adding new edge from {to_connections["from"].iloc[k]} to {merge_nodes[0]}')
                         dest = merge_nodes[0]
                         orig = to_connections['from'].iloc[k]
                         p1 = waypoints[waypoints.clusterID == orig]['geometry']
                         p2 = new_waypoints[new_waypoints.clusterID == dest]['geometry']
-                        #print(p1, p2)
                         edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
                         length = edge.length
                         # compute the orientation fo the edge (COG)
@@ -317,13 +317,10 @@ class MaritimeTrafficNetwork:
                         line = pd.DataFrame([[orig, dest, edge, direction, length, add_passages_to]], 
                                             columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
                         waypoint_connections = pd.concat([waypoint_connections, line])
-                drop_IDs.append(merge_nodes[j])
-                #print(waypoint_connections[waypoint_connections['from']==merge_nodes[0]][['from', 'to', 'passages']])
-                #print(waypoint_connections[waypoint_connections['to']==merge_nodes[0]][['from', 'to', 'passages']])
-        mask = ~(waypoint_connections['to'].isin(drop_IDs) | waypoint_connections['from'].isin(drop_IDs))
+                drop_IDs.append(merge_nodes[j])  # append original stop point to list of stop points to drop
+        # drop all 'old' connections
+        mask = ~(waypoint_connections['to'].isin(drop_IDs) | waypoint_connections['from'].isin(drop_IDs)) 
         new_waypoint_connections = waypoint_connections[mask]
-        #print(new_waypoint_connections[new_waypoint_connections['from']==9][['from', 'to', 'passages']])
-        #print(new_waypoint_connections[new_waypoint_connections['to']==9][['from', 'to', 'passages']])
         new_waypoint_connections = gpd.GeoDataFrame(new_waypoint_connections, geometry='geometry', crs=self.crs)
 
         # make graph from waypoints and waypoint connections
@@ -355,19 +352,39 @@ class MaritimeTrafficNetwork:
     
     def prune_graph(self, min_passages):
         '''
-        pruned the traffic graph. If an edge between nodes u and v has a weight<min_passages, 
+        pruned the traffic graph. If an edge between nodes u and v has a weight < min_passages, 
         the edge is removed when there is an alternative path between u and v
         '''
+        print('Pruning...')
         G_pruned = self.G.copy()
         G_temp = self.G.copy()
         connections_pruned = self.waypoint_connections.copy()
 
         edges_to_remove = []
+        
+        # remove all edges that violate the main traffic flow through waypoints
         for u, v in G_pruned.edges():
+            # get edge direction
+            edge_direction = G_pruned[u][v]['direction']
+            # get waypoint traffic directions
+            WP1_direction = G_pruned.nodes[u]['cog_after']
+            WP2_direction = G_pruned.nodes[v]['cog_before']
+            # compute angles
+            angle1 = np.abs(WP1_direction - edge_direction + 180) % 360 - 180
+            angle2 = np.abs(WP2_direction - edge_direction + 180) % 360 - 180
+            if (np.abs(angle1) > 90) & (np.abs(angle2) > 90):
+                edges_to_remove.append((u, v))       
+                        
+        
+        # iterate over all edges
+        for u, v in G_pruned.edges():
+            # if edge meets pruning criterion, temporarily remove edge
             if G_pruned[u][v]['weight'] < min_passages:
                 G_temp.remove_edge(u, v)
+                # test if a path exists between u and v. If so, add the edge to list of edges to remove
                 if nx.has_path(G_temp, u, v):
-                    edges_to_remove.append((u, v))
+                    if (u, v) not in edges_to_remove:
+                        edges_to_remove.append((u, v))
     
         # Actually remove the edges after iterating through all of them
         for u, v in edges_to_remove:
@@ -394,24 +411,28 @@ class MaritimeTrafficNetwork:
         print(f'Constructing maritime traffic network graph from waypoints and trajectories...')
         print(f'Progress:', end=' ', flush=True)
         start = time.time()  # start timer
-        # create graph adjacency matrix
+        
+        # initialize graph adjacency matrix
         n_clusters = len(self.waypoints)
-        coord_dict = {}
+        coord_dict = {}  # this will temporarily store the adjacency matrix in COO format
+        
         wps = self.waypoints.copy()
         wps.set_geometry('convex_hull', inplace=True)
         n_trajectories = len(self.significant_points.mmsi.unique())
         count = 0  # initialize a counter that keeps track of the progress
         percentage = 0  # percentage of progress
-        # for each trajectory, find the distance to all waypoints
+        
+        # iterate over all trajectories
         for mmsi in self.significant_points.mmsi.unique():
             # find all intersections and close passages of waypoints
             trajectory = self.significant_points_trajectory.get_trajectory(mmsi)
             trajectory_segments = trajectory.to_line_gdf()
-            distances = trajectory.distance(wps['convex_hull'])
+            distances = trajectory.distance(wps['convex_hull'])  # get distance of the trajectory to each waypoint convex hull
             mask = distances < max_distance
-            close_wps = wps[mask]
+            close_wps = wps[mask]  # filter waypoints: Only those that are within max_distance of the trajectory
             # find temporal order  of waypoint passage
             passages = []  # initialize ordered list of waypoint passages per line segment
+            # iterate over all trajectory segments
             for i in range(0, len(trajectory_segments)):
                 segment = trajectory_segments.iloc[i]
                 # distance of each segment to the selection of close waypoints
@@ -433,6 +454,7 @@ class MaritimeTrafficNetwork:
                 passed_wps = close_wps[mask]
                 passed_wps.sort_values(by='distance_to_origin', inplace=True)
                 passages.extend(passed_wps['clusterID'].tolist())
+            passages = list(OrderedDict.fromkeys(passages))
             
             # create edges between subsequent passed waypoints
             if len(passages) > 1:  # subset needs to contain at least 2 waypoints
@@ -513,8 +535,15 @@ class MaritimeTrafficNetwork:
 
     def trajectory_to_path(self, trajectory):
         '''
-        find the best path along the graph for a given trajectory and evaluate goodness of fit
+        Find the best path along the graph for a given trajectory and evaluate goodness of fit
+        The algorithm contains the following steps:
+        1. Find suitable waypoint close to the origin of the trajectory
+        2. Find suitable waypoint close to the destination of the trajectory
+        3. Find all waypoints passed by the trajectory
         :param trajectory: a single MovingPandas Trajectory object
+        returns:
+        :GeoDataFrame path_df: contains the sequence of edges traversed by a vessel which is closest to its original trajectory
+        :DataFrame evaluation_results: contains metrics for the 'goodness of fit'
         '''
         G = self.G_pruned.copy()
         waypoints = self.waypoints.copy()
@@ -534,28 +563,30 @@ class MaritimeTrafficNetwork:
 
         ### GET ALL INTERSECTIONS between trajectory and waypoints
         passages = geometry_utils.find_WP_intersections(trajectory, waypoints)
-        #print('Intersections found:', len(passages))
+        #print('Intersections found:', passages)
         
         # Distinguish three cases
-        # passages is empty and orig != dest
+        # 1. passages is empty and orig != dest
         if ((len(passages) == 0) & (orig_WP != dest_WP)):
             if dist_orig < 100:
                 passages.append(orig_WP)
             if dist_dest < 100:
                 passages.append(dest_WP)
-        # passages is empty and orig == dest --> nothing we can do here
+        # 2. passages is empty and orig == dest --> nothing we can do here
         elif ((len(passages) == 0) & (orig_WP == dest_WP)):
             passages = []
-        # found passages
+        # 3. found passages
         else:
-            if ((passages[0] != orig_WP) & (dist_orig < 100)):
+            # if the potential start waypoint is not in the list of intersections, but close to the origin of the trajectory, add it to the set of passages
+            if ((orig_WP not in passages) & (dist_orig < 100)):
                 passages.insert(0, orig_WP)
             else:
                 orig_WP = passages[0]
                 orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
                 idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
             
-            if ((passages[-1] != dest_WP) & (dist_dest < 100)):
+            # if the potential destination waypoint is not in the list of intersections, but close to the destination of the trajectory, add it to the set of passages
+            if ((dest_WP not in passages) & (dist_dest < 100)):
                 passages.append(dest_WP)
             else:
                 dest_WP = passages[-1]
@@ -564,18 +595,32 @@ class MaritimeTrafficNetwork:
         
         if len(passages) >= 2:
             try:
-                #print('Actual start and end point:', passages[0], passages[-1])
-                # find edge sequence between each waypoint pair, that minimizes the distance between trajectory and edge sequence
-                path = []
-                #eval_distances = []
+                #print('Executing try statement')
+                path = []  # initialize the best edge sequence traversed by the vessel
+                # find the edge sequence between each waypoint pair, that MINIMIZES THE DISTANCE between trajectory and edge sequence
                 for i in range(0, len(passages)-1):
-                    #min_sequence = nx.shortest_path(G, passages[i], passages[i+1])
-                    #edge_sequences = nx.all_simple_paths(G, passages[i], passages[i+1], cutoff=len(min_sequence)+1)
+                    # find all possible shortest connections between two waypoints
+                    # check if we are going backwards
+                    WP1 = waypoints[waypoints.clusterID==passages[i]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                    WP2 = waypoints[waypoints.clusterID==passages[i+1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                    idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                    idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                    # if we are going backwards, skip to next WP
+                    #print('Point indices:', idx1, idx2)
+                    #print('From:', passages[i], ' To:', passages[i+1])
+                    if idx2 < idx1:
+                        #print('going back is not allowed!')
+                        passages[i+1]=passages[i]
+                        continue
+                    #print('From:', passages[i], ' To:', passages[i+1])
                     edge_sequences = nx.all_shortest_paths(G, passages[i], passages[i+1])
                     #print('=======================')
+                    #print(f'Iterating through edge sequences')
                     min_mean_distance = np.inf
+                    # iterate over all possible shortest connections
                     for edge_sequence in edge_sequences:
                         # create a linestring from the edge sequence
+                        #print('Edge sequence:', edge_sequence)
                         multi_line = []
                         for j in range(0, len(edge_sequence)-1):
                             line = connections[(connections['from'] == edge_sequence[j]) & (connections['to'] == edge_sequence[j+1])].geometry.item()
@@ -583,28 +628,28 @@ class MaritimeTrafficNetwork:
                         multi_line = MultiLineString(multi_line)
                         multi_line = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
                         # measure distance between the multi_line and the trajectory
-                        WP1 = waypoints[waypoints.clusterID==edge_sequence[0]]['geometry'].item()
-                        WP2 = waypoints[waypoints.clusterID==edge_sequence[-1]]['geometry'].item()
-                        idx1 = np.argmin(WP1.distance(points.geometry))
-                        idx2 = np.argmin(WP2.distance(points.geometry))
-                        #print(idx1, idx2)
+                        WP1 = waypoints[waypoints.clusterID==edge_sequence[0]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                        WP2 = waypoints[waypoints.clusterID==edge_sequence[-1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                        idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                        idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                        #print('Point indices:', idx1, idx2)
+                        # Check if we are moving backwards
                         if idx2 < idx1:
-                            temp = idx1
-                            idx1 = idx2
-                            idx2 = temp
-                        eval_points = points.iloc[idx1:idx2+1]
-                        distances = eval_points.distance(multi_line)
+                            #print('going back is not allowed! (inner)')
+                            continue
+                        eval_points = points.iloc[idx1:idx2+1]  # trajectory points associated with the edge sequence
+                        distances = eval_points.distance(multi_line)  # distance between each trajectory point and the edge sequence
                         mean_distance = np.mean(distances)
-                        #print(edge_sequence)
-                        #print(mean_distance)
+                        #print('distances:', distances)
+                        #print('Sequence:', edge_sequence)
+                        #print('Mean distance:', mean_distance)
+                        # when mean distance is smaller than any mean distance encoutered before --> save current edge sequence as best edge sequence
                         if mean_distance < min_mean_distance:
                             min_mean_distance = mean_distance
                             best_sequence = edge_sequence
-                            #best_distances = distances
-                    #eval_distances.append(best_distances.to_list())
                     path.append(best_sequence)
                     #print('----------------------')
-                # delete duplicates from list
+                # delete duplicates from path
                 flattened_path = [item for sublist in path for item in sublist]
                 temp = [flattened_path[0]]
                 for i in range(1, len(flattened_path)):
@@ -615,6 +660,7 @@ class MaritimeTrafficNetwork:
                 #print(mmsi, nx.is_path(G, path))
                 #print('Found path:', path)
         
+                # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
                 path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
                 for j in range(0, len(path)-1):
                     #print(path[j], path[j+1])
@@ -626,40 +672,49 @@ class MaritimeTrafficNetwork:
                 ###########
                 # evaluate goodness of fit
                 ###########
-                if idx_orig >= idx_dest:
+                if idx_orig >= idx_dest:  # In some cases this is needed, for example for roundtrips of ferries
                     idx_orig = 0
                     idx_dest = -1
                 eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
-                multi_line = MultiLineString(list(path_df.geometry))
+                multi_line = MultiLineString(list(path_df['geometry']))
                 edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
-                distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
-                mean_dist = distances.mean()
-                median_dist = distances.median()
-                max_dist = distances.max()
+                # compute the fraction of trajectory that can be associate with an edge sequence
                 t1 = points.index[idx_orig]
                 t2 = points.index[idx_dest]
                 try:
                     percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
                 except:
                     percentage_covered = 1
-                #percentage_covered = (len(eval_distances)-len(path)) / len(points)
+                length_ratio = edge_sequence.length / trajectory.get_length()
+                #print('Length ratio:', length_ratio)
+                distances = eval_points.distance(edge_sequence)  # compute distance between edge sequence and trajectory points
+                # punishing 'wiggly' edge sequences
+                if length_ratio > 1:
+                    distances = distances*length_ratio
+                mean_dist = distances.mean()  # compute mean distance
+                median_dist = distances.median()  # compute median distance
+                max_dist = distances.max()  # compute max_distance
                 evaluation_results = pd.DataFrame({'mmsi':mmsi,
                                                    'mean_dist':mean_dist,
                                                    'median_dist':median_dist,
                                                    'max_dist':max_dist,
                                                    'distances':[distances.tolist()],
                                                    'fraction_covered':percentage_covered,
+                                                   'length ratio': length_ratio,
                                                    'message':message}
                                                  )
                 #print(mmsi, ': success')
-            
+                
+            # In some cases the above algorithm gets stuck in waypoints without any connections leading to the next waypoint
+            # In this case we attempt to find the shortest path between origin and destination
             except:
+                # if a path exists, we compute it
                 if nx.has_path(G, passages[0], passages[-1]):
                     path = nx.shortest_path(G, passages[0], passages[-1])
                     message = 'attempt'
+                    # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
                     path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
                     for j in range(0, len(path)-1):
-                        #print(path[j], path[j+1])
                         edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
                         temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
                         path_df = pd.concat([path_df, temp])
@@ -690,6 +745,7 @@ class MaritimeTrafficNetwork:
                                                        'fraction_covered':percentage_covered,
                                                        'message':message}
                                                      )
+                # If there is no path between origin and destination, we cannot map the trajectory to an edge sequence
                 else:
                     message = 'no_path'
                     path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
@@ -702,6 +758,7 @@ class MaritimeTrafficNetwork:
                                                        'message':message}
                                                      )
         
+        # When there are no intersections with any waypoints, we cannot map the trajectory to an edge sequence
         else:
             #print('Not enough intersections found. Cannot map trajectory to graph...')
             message = 'no_intersects'
@@ -722,7 +779,7 @@ class MaritimeTrafficNetwork:
         outputs the shortest path in the network using Dijkstra's algorithm.
         :param orig: int, ID of the start waypoint
         :param dest: int, ID of the destination waypoint
-        :param weight: string, name of the edge feature to be used as weight in Dijsktra's algorithm
+        :param weight: string, name of the edge feature to be used as weight in Dijkstra's algorithm
         '''     
         try:
             # compute shortest path using dijsktra's algorithm (outputs a list of nodes)
@@ -744,7 +801,10 @@ class MaritimeTrafficNetwork:
     def evaluate_graph(self, trajectories):
         '''
         given a selection of trajectories, compute evaluation metrics for the graph
+        input:
+        :MovingPandas TrajectoryCollection: trajectories to evaluate the graph against
         '''
+        # initialize output variables
         all_paths = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
         all_evaluation_results = pd.DataFrame(columns = ['mmsi', 'mean_dist', 'median_dist', 'max_dist', 'distances', 'message'])
         n_trajectories = len(trajectories)
@@ -752,8 +812,10 @@ class MaritimeTrafficNetwork:
         print(f'Progress:', end=' ', flush=True)
         count = 0  # initialize a counter that keeps track of the progress
         percentage = 0  # percentage of progress
+        
+        # iterate over all evaluattion trajectories
         for trajectory in trajectories:
-            path, evaluation_results = self.trajectory_to_path(trajectory)
+            path, evaluation_results = self.trajectory_to_path(trajectory)  # evaluate trajectory
             all_paths = pd.concat([all_paths, path])
             all_evaluation_results = pd.concat([all_evaluation_results, evaluation_results])
             count += 1
@@ -769,7 +831,7 @@ class MaritimeTrafficNetwork:
         print((all_evaluation_results.groupby('message').count() / len(all_evaluation_results)).to_string())
         print('\n --------------------------- \n')
         
-        # percentage of trajectories that could not be mapped properly
+        # percentage of trajectories that could not be mapped to the graph
         nan_mask = all_evaluation_results.isna().any(axis=1)
         num_rows_with_nan = all_evaluation_results[nan_mask].shape[0]
         percentage_nan = num_rows_with_nan/len(all_evaluation_results)
@@ -779,7 +841,6 @@ class MaritimeTrafficNetwork:
         print(f'Mean fraction of each trajectory covered by the path on the graph: {mean_fraction_covered:.3f} \n')
         
         not_nan = all_evaluation_results[~nan_mask]
-        # distances = not_nan[not_nan.message=='success']['distances'].tolist()
         distances = not_nan['distances'].tolist()
         distances = [item for sublist in distances for item in sublist]
         

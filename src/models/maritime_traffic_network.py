@@ -854,7 +854,8 @@ class MaritimeTrafficNetwork:
         if len(passages) >= 2:
             try:
                 if verbose: print('Executing try statement')
-                path = [[passages[0]]]  # initialize the best edge sequence traversed by the vessel
+                path = [[passages[0]]] # initialize the best edge sequence traversed by the vessel
+                #eval_distances = []  # initialize list for distances between trajectory and edge sequence
                 # find the edge sequence between each waypoint pair, that MINIMIZES THE DISTANCE between trajectory and edge sequence
                 for i in range(0, len(passages)-1):
                     if verbose: print('From:', passages[i], ' To:', passages[i+1])
@@ -906,10 +907,13 @@ class MaritimeTrafficNetwork:
                         if mean_distance < min_mean_distance:
                             min_mean_distance = mean_distance
                             best_sequence = edge_sequence
+                            #best_distances = distances
                     path.append(best_sequence[1:])
+                    #eval_distances.append(best_distances)
                     if verbose: print('----------------------')
-                # delete duplicates from path
+                # flatten path
                 path = [item for sublist in path for item in sublist]
+                #eval_distances = [item for sublist in eval_distances for item in sublist]
                 message = 'success'
                 if verbose: print('Found path:', path)
                 if verbose: print(mmsi, nx.is_path(G, path))
@@ -938,9 +942,14 @@ class MaritimeTrafficNetwork:
                 t2 = points.index[idx_dest]
                 try:
                     percentage_covered = trajectory.get_linestring_between(t1, t2).length / trajectory.get_length()
+                    length_factor = edge_sequence.length / trajectory.get_linestring_between(t1, t2).length
                 except:
                     percentage_covered = 1
+                    length_factor = edge_sequence.length / trajectory.get_length()
                 distances = eval_points.distance(edge_sequence)
+                if length_factor > 1:
+                    distances = distances*length_factor
+                #distances = eval_distances
                 mean_dist = np.mean(distances)  # compute mean distance
                 median_dist = np.median(distances)  # compute median distance
                 max_dist = np.max(distances)  # compute max_distance

@@ -244,7 +244,7 @@ def find_WP_intersections(points, trajectory, waypoints, G, channel_width):
         idx2 = np.argmin(WP2.distance(points['geometry']))  # index of trajectory point closest to end of edge sequence
         # print(passages[i], passages[i+1], idx1, idx2)
         # if we are going forward, append next waypoint
-        if idx2 < idx1:
+        if idx2 <= idx1:
             passages[i+1] = passages[i]
     cleaned_passages = list(OrderedDict.fromkeys(passages))
 
@@ -275,6 +275,18 @@ def distance_points_to_line(points, line):
     for p1, p2 in zip(points['geometry'], interpolated_points):
         distances.append(p1.distance(p2))
     return distances
+
+def sspd(trajectory1, points1, trajectory2, points2):
+    '''
+    Symmetrized Segment Path Distance between two trajectories
+    '''
+    d12 = points1.distance(trajectory2)
+    SPD12 = np.mean(d12)
+    d21 = points2.distance(trajectory1)
+    SPD21 = np.mean(d21)
+    SSPD = (SPD12 + SPD21) / 2
+
+    return SSPD, d12, d21
 
 def LEGACY_aggregate_edges(waypoints, waypoint_connections):
     # refine the graph

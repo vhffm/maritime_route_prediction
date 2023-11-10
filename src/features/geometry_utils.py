@@ -145,49 +145,6 @@ def find_dest_WP(points, waypoints):
     
     return dest_WP, idx_dest, dist_dest
 
-def LEGACY_find_WP_intersections(trajectory, waypoints):
-    '''
-    given a trajectory, find all waypoint intersections in the correct order
-    '''
-    max_distance = 50
-    max_angle = 30
-    
-    # simplify trajectory
-    simplified_trajectory = mpd.DouglasPeuckerGeneralizer(trajectory).generalize(tolerance=10)
-    simplified_trajectory.add_direction()
-    trajectory_segments = simplified_trajectory.to_line_gdf()
-    
-    # filter waypoints: only consider waypoints within a certain distance to the trajectory
-    distances = trajectory.distance(waypoints['convex_hull'])
-    mask = distances < max_distance
-    close_wps = waypoints[mask]
-    passages = []  # initialize ordered list of waypoint passages per line segment
-    for i in range(0, len(trajectory_segments)-1):
-        segment = trajectory_segments.iloc[i]
-        # distance of each segment to the selection of close waypoints
-        distance_to_line = segment['geometry'].distance(close_wps['convex_hull'])  # distance between line segment and waypoint convex hull  
-        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps['geometry'])  # distance between first point of segment and waypoint centroids (needed for sorting)
-        close_wps['distance_to_line'] = distance_to_line.tolist()
-        close_wps['distance_to_origin'] = distance_to_origin.tolist()
-        # angle between line segment and mean traffic direction in each waypoint
-        WP_cog_before = close_wps['cog_before'] 
-        WP_cog_after  = close_wps['cog_after']
-        trajectory_cog = segment['direction']
-        #print('WP COG before: ', WP_cog_before, 'WP COG after: ', WP_cog_after, 'Trajectory COG: ', trajectory_cog)
-        close_wps['angle_before'] = np.abs(WP_cog_before - trajectory_cog + 180) % 360 - 180
-        close_wps['angle_after'] = np.abs(WP_cog_after - trajectory_cog + 180) % 360 - 180
-        # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
-        mask = ((close_wps['distance_to_line']<max_distance) & 
-                (np.abs(close_wps['angle_before'])<max_angle) & 
-                (np.abs(close_wps['angle_after'])<max_angle))
-        passed_wps = close_wps[mask]
-        #print(close_wps[['clusterID', 'distance_to_line', 'angle_before', 'angle_after']])
-        # ensure correct ordering of waypoint passages
-        passed_wps.sort_values(by='distance_to_origin', inplace=True)
-        passages.extend(passed_wps['clusterID'].tolist())
-        
-    return list(OrderedDict.fromkeys(passages))
-
 def find_WP_intersections(points, trajectory, waypoints, G, channel_width):
     '''
     given a trajectory, find all waypoint intersections in the correct order
@@ -288,6 +245,15 @@ def sspd(trajectory1, points1, trajectory2, points2):
 
     return SSPD, d12, d21
 
+def get_geo_df(path, connections):
+    path_df = pd.DataFrame(columns=['orig', 'dest', 'geometry'])
+    for j in range(0, len(path)-1):
+        edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+        temp = pd.DataFrame([[path[j], path[j+1], edge]], columns=['orig', 'dest', 'geometry'])
+        path_df = pd.concat([path_df, temp])
+        path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=connections.crs)
+    return path_df
+
 def LEGACY_aggregate_edges(waypoints, waypoint_connections):
     # refine the graph
     # each edge that intersects the convex hull of another waypoint is divided in segments
@@ -363,3 +329,46 @@ def LEGACY_aggregate_edges(waypoints, waypoint_connections):
         print(f'Edge aggregation finished.')
     
     return A_refined, waypoint_connections_refined, flag
+
+def LEGACY_find_WP_intersections(trajectory, waypoints):
+    '''
+    given a trajectory, find all waypoint intersections in the correct order
+    '''
+    max_distance = 50
+    max_angle = 30
+    
+    # simplify trajectory
+    simplified_trajectory = mpd.DouglasPeuckerGeneralizer(trajectory).generalize(tolerance=10)
+    simplified_trajectory.add_direction()
+    trajectory_segments = simplified_trajectory.to_line_gdf()
+    
+    # filter waypoints: only consider waypoints within a certain distance to the trajectory
+    distances = trajectory.distance(waypoints['convex_hull'])
+    mask = distances < max_distance
+    close_wps = waypoints[mask]
+    passages = []  # initialize ordered list of waypoint passages per line segment
+    for i in range(0, len(trajectory_segments)-1):
+        segment = trajectory_segments.iloc[i]
+        # distance of each segment to the selection of close waypoints
+        distance_to_line = segment['geometry'].distance(close_wps['convex_hull'])  # distance between line segment and waypoint convex hull  
+        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps['geometry'])  # distance between first point of segment and waypoint centroids (needed for sorting)
+        close_wps['distance_to_line'] = distance_to_line.tolist()
+        close_wps['distance_to_origin'] = distance_to_origin.tolist()
+        # angle between line segment and mean traffic direction in each waypoint
+        WP_cog_before = close_wps['cog_before'] 
+        WP_cog_after  = close_wps['cog_after']
+        trajectory_cog = segment['direction']
+        #print('WP COG before: ', WP_cog_before, 'WP COG after: ', WP_cog_after, 'Trajectory COG: ', trajectory_cog)
+        close_wps['angle_before'] = np.abs(WP_cog_before - trajectory_cog + 180) % 360 - 180
+        close_wps['angle_after'] = np.abs(WP_cog_after - trajectory_cog + 180) % 360 - 180
+        # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
+        mask = ((close_wps['distance_to_line']<max_distance) & 
+                (np.abs(close_wps['angle_before'])<max_angle) & 
+                (np.abs(close_wps['angle_after'])<max_angle))
+        passed_wps = close_wps[mask]
+        #print(close_wps[['clusterID', 'distance_to_line', 'angle_before', 'angle_after']])
+        # ensure correct ordering of waypoint passages
+        passed_wps.sort_values(by='distance_to_origin', inplace=True)
+        passages.extend(passed_wps['clusterID'].tolist())
+        
+    return list(OrderedDict.fromkeys(passages))

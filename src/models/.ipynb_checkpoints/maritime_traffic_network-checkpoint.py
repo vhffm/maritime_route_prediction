@@ -604,12 +604,39 @@ class MaritimeTrafficNetwork:
                 # find the edge sequence between each waypoint pair, that MINIMIZES THE DISTANCE between trajectory and edge sequence
                 for i in range(0, len(passages)-1):
                     if verbose: print('From:', passages[i], ' To:', passages[i+1])
+                    WP1 = waypoints[waypoints.clusterID==passages[i]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                    WP2 = waypoints[waypoints.clusterID==passages[i+1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                    idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                    idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                    if verbose: print('Point indices:', idx1, idx2)
+                    # Check if we are moving backwards
+                    if idx2 < idx1:
+                        if verbose: print('going back is not allowed! (inner)')
+                        continue
                     ### CORE FUNCTION
-                    min_sequence_length = len(nx.shortest_path(G_channel, passages[i], passages[i+1]))
-                    if min_sequence_length > 5:
+                    ### when current waypoint pair is very close, just take the shortest path to save computation time
+                    if (idx2-idx1) <= 3:
+                        if verbose: print('Close waypoints. Taking shortest path')
                         edge_sequences = nx.all_shortest_paths(G_channel, passages[i], passages[i+1])
+                    # if waypoints are further apart, explore longer paths
                     else:
-                        edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=5)  
+                        # compute length of shortest possible path
+                        min_sequence_length = len(nx.shortest_path(G_channel, passages[i], passages[i+1]))
+                        # if the shortest path is already long, just take the shortest path
+                        if min_sequence_length > 5:
+                            if verbose: print('Far apart waypoints. Taking shortest path.')
+                            edge_sequences = nx.all_shortest_paths(G_channel, passages[i], passages[i+1])
+                        # if the shortest path is short, explore alternative paths
+                        else:
+                            if verbose: print('Far apart waypoints. Exploring all paths with limited length.')
+                            cutoff = 5
+                            edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)
+                            while len(list(edge_sequences)) > 500:
+                                cutoff -= 1
+                                if verbose: print('Too many alternative paths. Reducing cutoff to ', cutoff)
+                                edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)
+                            if verbose: print('Final cutoff ', cutoff)
+                            edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)    
                     #################
                     if verbose: print('=======================')
                     if verbose: print(f'Iterating through edge sequences')
@@ -625,16 +652,7 @@ class MaritimeTrafficNetwork:
                         multi_line = MultiLineString(multi_line)
                         multi_line = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
                         # measure distance between the multi_line and the trajectory
-                        WP1 = waypoints[waypoints.clusterID==edge_sequence[0]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
-                        WP2 = waypoints[waypoints.clusterID==edge_sequence[-1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
-                        idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
-                        idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
-                        if verbose: print('Point indices:', idx1, idx2)
-                        # Check if we are moving backwards
-                        if idx2 < idx1:
-                            if verbose: print('going back is not allowed! (inner)')
-                            continue
-                        elif idx2 == idx1:
+                        if idx2 == idx1:
                             eval_points = points.iloc[idx1]  # trajectory points associated with the edge sequence
                             eval_point = eval_points['geometry']
                             SSPD = eval_point.distance(multi_line)
@@ -645,7 +663,7 @@ class MaritimeTrafficNetwork:
                             t2 = points.index[idx2]
                             eval_traj = trajectory.get_linestring_between(t1, t2)  # trajectory associated with the edge sequence
                             num_points = len(eval_points)
-                            interpolated_points = [multi_line.interpolate(dist) for dist in range(0, int(multi_line.length)+1, int(multi_line.length/num_points))]
+                            interpolated_points = [multi_line.interpolate(dist) for dist in range(0, int(multi_line.length)+1, int(multi_line.length/num_points)+1)]
                             interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
                             interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
                             interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=self.crs)
@@ -695,7 +713,7 @@ class MaritimeTrafficNetwork:
                     eval_traj = trajectory
                     percentage_covered = 1
                 num_points = len(eval_points)
-                interpolated_points = [edge_sequence.interpolate(dist) for dist in range(0, int(edge_sequence.length)+1, int(edge_sequence.length/num_points))]
+                interpolated_points = [edge_sequence.interpolate(dist) for dist in range(0, int(edge_sequence.length)+1, int(edge_sequence.length/num_points)+1)]
                 interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
                 interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
                 interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=self.crs)    
@@ -744,7 +762,7 @@ class MaritimeTrafficNetwork:
                         eval_traj = trajectory
                         percentage_covered = 1
                     num_points = len(eval_points)
-                    interpolated_points = [edge_sequence.interpolate(dist) for dist in range(0, int(edge_sequence.length)+1, int(edge_sequence.length/num_points))]
+                    interpolated_points = [edge_sequence.interpolate(dist) for dist in range(0, int(edge_sequence.length)+1, int(edge_sequence.length/num_points)+1)]
                     interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
                     interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
                     interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=self.crs)    
@@ -856,8 +874,10 @@ class MaritimeTrafficNetwork:
         mean_fraction_covered = all_evaluation_results[~nan_mask]['fraction_covered'].mean()
         print(f'Mean fraction of each trajectory covered by the path on the graph: {mean_fraction_covered:.3f} \n')
         
-        not_nan = all_evaluation_results[~nan_mask]
-        distances = not_nan['distances'].tolist()
+        #not_nan = all_evaluation_results[~nan_mask]
+        success_mask = all_evaluation_results['message']=='success'
+        success_eval_results = all_evaluation_results[success_mask]
+        distances = success_eval_results['distances'].tolist()
         distances = [item for sublist in distances for item in sublist]
         
         print(f'Mean distance      = {np.mean(distances):.2f} m')
@@ -868,7 +888,7 @@ class MaritimeTrafficNetwork:
         fig, axes = plt.subplots(1, 3, figsize=(12, 6))
 
         # Plot 1: Distance between each trajectory and edge sequence
-        plot_evaluation = all_evaluation_results[~nan_mask]
+        plot_evaluation = success_eval_results
         axes[0].boxplot(plot_evaluation.distances)
         axes[0].set_title('Distance between trajectory \n and edge sequence')
         axes[0].set_ylabel('Distance (m)')

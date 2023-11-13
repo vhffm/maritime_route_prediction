@@ -352,8 +352,10 @@ class MaritimeTrafficNetwork:
     
     def prune_graph(self, min_passages):
         '''
-        pruned the traffic graph. If an edge between nodes u and v has a weight < min_passages, 
-        the edge is removed when there is an alternative path between u and v
+        Prune the traffic graph. 
+        Criterion:
+        If an edge between nodes u and v has a weight < min_passages, 
+        the edge is removed when there is an alternative path between u and v shorter than 5 edges
         '''
         print('Pruning...')
         G_pruned = self.G.copy()
@@ -367,24 +369,27 @@ class MaritimeTrafficNetwork:
             # get edge direction
             edge_direction = G_pruned[u][v]['direction']
             # get waypoint traffic directions
-            WP1_direction = G_pruned.nodes[u]['cog_after']
-            WP2_direction = G_pruned.nodes[v]['cog_before']
-            # compute angles
-            angle1 = np.abs(WP1_direction - edge_direction + 180) % 360 - 180
-            angle2 = np.abs(WP2_direction - edge_direction + 180) % 360 - 180
-            if (np.abs(angle1) > 90) & (np.abs(angle2) > 90):
-                edges_to_remove.append((u, v))       
-                        
-        
+            try:
+                WP1_direction = G_pruned.nodes[u]['cog_after']
+                WP2_direction = G_pruned.nodes[v]['cog_before']
+                # compute angles
+                angle1 = np.abs(WP1_direction - edge_direction + 180) % 360 - 180
+                angle2 = np.abs(WP2_direction - edge_direction + 180) % 360 - 180
+                if (np.abs(angle1) > 90) & (np.abs(angle2) > 90):
+                    edges_to_remove.append((u, v))
+            except:
+                edges_to_remove.append((u, v))
+                
         # iterate over all edges
         for u, v in G_pruned.edges():
             # if edge meets pruning criterion, temporarily remove edge
             if G_pruned[u][v]['weight'] < min_passages:
                 G_temp.remove_edge(u, v)
-                # test if a path exists between u and v. If so, add the edge to list of edges to remove
+                # test if a path exists between u and v. When shorter than 5, add the edge to list of edges to remove
                 if nx.has_path(G_temp, u, v):
-                    if (u, v) not in edges_to_remove:
-                        edges_to_remove.append((u, v))
+                    if len(nx.shortest_path(G_temp, u, v)) <= 5:
+                        if (u, v) not in edges_to_remove:
+                            edges_to_remove.append((u, v))
     
         # Actually remove the edges after iterating through all of them
         for u, v in edges_to_remove:
@@ -398,7 +403,59 @@ class MaritimeTrafficNetwork:
         print('------------------------')
         
         self.G_pruned = G_pruned
-        self.waypoint_connections_pruned = connections_pruned  
+        self.waypoint_connections_pruned = connections_pruned
+
+    def prune_graph_from_paths(self, paths, reset=True):
+        '''
+        Prune the traffic graph.
+        Criterion:
+        A list of passages through the graph is given as input.
+        All edges that are not contained in the list of passages are pruned.
+        '''
+        print(f'Pruning based on {len(paths)} passages...')
+        
+        # initialize pruned graph
+        if self.G_pruned == []:
+            G_pruned = self.G.copy()
+            connections_pruned = self.waypoint_connections.copy()
+        else:
+            G_pruned = self.G_pruned.copy()
+            connections_pruned = self.waypoint_connections_pruned.copy()
+
+        # if reset is desired, set all edge weights that count passages to 0
+        if reset == True:
+            for u, v, data in G_pruned.edges(data=True):
+                data['weight'] = 0
+                data['inverse_weight'] = 0
+        
+        # add edge weight for each passage
+        for path in paths:
+            for i  in range(0, len(path)-1):
+                u = path[i]
+                v = path[i+1]
+                G_pruned[u][v]['weight'] += 1
+
+        edges_to_remove = []
+                
+        # iterate over all edges
+        for u, v in G_pruned.edges():
+            # if edge has not been sailed by any vessel, add it to the list of edges to remove
+            if G_pruned[u][v]['weight'] == 0:
+                edges_to_remove.append((u, v))
+                            
+        # Actually remove the edges after iterating through all of them
+        for u, v in edges_to_remove:
+            G_pruned.remove_edge(u, v)
+            connections_pruned = connections_pruned[~((connections_pruned['from'] == u) & (connections_pruned['to'] == v))]
+
+        print('------------------------')
+        print(f'Pruned Graph:')
+        print(f'Number of nodes: {G_pruned.number_of_nodes()} ({nx.number_of_isolates(G_pruned)} isolated)')
+        print(f'Number of edges: {G_pruned.number_of_edges()}')
+        print('------------------------')
+        
+        self.G_pruned = G_pruned
+        self.waypoint_connections_pruned = connections_pruned
 
     def make_graph_from_waypoints(self, max_distance=10, max_angle=45):
         '''
@@ -673,9 +730,7 @@ class MaritimeTrafficNetwork:
                         if SSPD < min_mean_distance:
                             min_mean_distance = SSPD
                             best_sequence = edge_sequence
-                            #best_distances = distances
                     path.append(best_sequence[1:])
-                    #eval_distances.append(best_distances)
                     if verbose: print('----------------------')
                 # flatten path
                 path = [item for sublist in path for item in sublist]
@@ -1000,11 +1055,14 @@ class MaritimeTrafficNetwork:
                                 style_kwds={'weight':1, 'color':'green', 'opacity':0.7})
         return map
     
-    def plot_graph_canvas(self):
+    def plot_graph_canvas(self, pruned=False):
         '''
         Plot the maritime traffic network graph on a white canvas
         '''
-        G = self.G
+        if pruned == True:
+            G = self.G_pruned
+        else:
+            G = self.G
         # Create a dictionary mapping nodes to their positions
         node_positions = {node: G.nodes[node]['position'] for node in G.nodes}
         elarge = [(u, v) for (u, v, d) in G.edges(data=True) if d["weight"] > 4]

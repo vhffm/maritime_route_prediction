@@ -200,7 +200,7 @@ def find_WP_intersections(points, trajectory, waypoints, G, channel_width):
         idx1 = np.argmin(WP1.distance(points['geometry']))  # index of trajectory point closest to beginning of edge sequence
         idx2 = np.argmin(WP2.distance(points['geometry']))  # index of trajectory point closest to end of edge sequence
         # print(passages[i], passages[i+1], idx1, idx2)
-        # if we are going forward, append next waypoint
+        # if we are not going forward, skip next waypoint
         if idx2 <= idx1:
             passages[i+1] = passages[i]
     cleaned_passages = list(OrderedDict.fromkeys(passages))

@@ -4,6 +4,7 @@ import movingpandas as mpd
 from datetime import timedelta, datetime
 import warnings
 import sys
+import argparse
 warnings.filterwarnings('ignore')
 
 print("Geopandas has version {}".format(gpd.__version__))
@@ -96,3 +97,13 @@ def add_ship_metadata(filename, df, join_on='mmsi'):
     print(f'Overlap:            {n_matching} MMSIs')
 
     return df
+
+
+def main():
+    print('test')
+
+
+if __name__ == '__main__':
+    main()
+        
+    

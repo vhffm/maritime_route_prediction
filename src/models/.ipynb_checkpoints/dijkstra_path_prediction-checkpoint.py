@@ -3,22 +3,16 @@ import geopandas as gpd
 import movingpandas as mpd
 import numpy as np
 from datetime import timedelta, datetime
-from shapely.geometry import Point, LineString, MultiLineString
-from shapely import ops
 import networkx as nx
 import matplotlib.pyplot as plt
-import folium
 import time
 import warnings
-import pickle
 import sys
 
 # add paths for modules
-sys.path.append('../visualization')
 sys.path.append('../features')
 
 # import modules
-import visualize
 import geometry_utils
 
 
@@ -91,48 +85,18 @@ class DijkstraPathPrediction:
             
             if eval_mode == 'path':
                 # build edge sequence from ground truth path
-                ground_truth_line = []
-                for j in range(0, len(true_path)-1):
-                    line = connections[(connections['from'] == true_path[j]) & (connections['to'] == true_path[j+1])].geometry.item()
-                    ground_truth_line.append(line)
-                ground_truth_line = MultiLineString(ground_truth_line)
-                ground_truth_line = ops.linemerge(ground_truth_line)
+                ground_truth_line = geometry_utils.node_sequence_to_linestring(true_path, connections)
                 # interpolate ground truth line
-                ground_truth_points = [ground_truth_line.interpolate(dist) for dist in range(0, int(ground_truth_line.length)+1, 50)]
-                ground_truth_points_coords = [Point(point.x, point.y) for point in ground_truth_points]  # interpolated points on edge sequence
-                ground_truth_points = pd.DataFrame({'geometry': ground_truth_points_coords})
-                ground_truth_points = gpd.GeoDataFrame(ground_truth_points, geometry='geometry', crs=connections.crs)
+                ground_truth_points = geometry_utils.interpolate_line_to_gdf(ground_truth_line, connections.crs, 100)
             else:
-                # build edge sequence from ground truth trajectory
+                # get ground truth trajectory
                 trajectory = test_trajectories.get_trajectory(mmsi)
-                #ground_truth_line = trajectory.to_traj_gdf()
-                ground_truth_points = trajectory.to_point_gdf()
-                # clip trajectory to the segment between origin and destination waypoint
-                WP1 = waypoints[waypoints.clusterID==orig]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
-                WP2 = waypoints[waypoints.clusterID==dest]['geometry'].item()  # coordinates of waypoint at end of edge sequence
-                idx1 = np.argmin(WP1.distance(ground_truth_points.geometry))  # index of trajectory point closest to beginning of edge sequence
-                idx2 = np.argmin(WP2.distance(ground_truth_points.geometry))  # index of trajectory point closest to end of edge sequence
-                if idx2 <= idx1:  # for roundtrips
-                    print('roundtrip', idx1, idx2)
-                    idx1 = 0
-                    idx2 = -1
-                t1 = ground_truth_points.index[idx1]
-                t2 = ground_truth_points.index[idx2]
-                ground_truth_line = trajectory.get_linestring_between(t1, t2)  # trajectory associated with the edge sequence
-                ground_truth_points = ground_truth_points.iloc[idx1:idx2]  # trajectory points associated with the edge sequence
+                ground_truth_line, ground_truth_points = geometry_utils.clip_trajectory_between_WPs(trajectory, orig, dest, waypoints)
             
-            # build edge sequence from predicted path
-            predicted_line = []
-            for j in range(0, len(predicted_path)-1):
-                line = connections[(connections['from'] == predicted_path[j]) & (connections['to'] == predicted_path[j+1])].geometry.item()
-                predicted_line.append(line)
-            predicted_line = MultiLineString(predicted_line)
-            predicted_line = ops.linemerge(predicted_line)
+            # build linestring from predicted path
+            predicted_line = geometry_utils.node_sequence_to_linestring(predicted_path, connections)
             # interpolate predicted line
-            predicted_points = [predicted_line.interpolate(dist) for dist in range(0, int(predicted_line.length)+1, 50)]
-            predicted_points_coords = [Point(point.x, point.y) for point in predicted_points]  # interpolated points on edge sequence
-            predicted_points = pd.DataFrame({'geometry': predicted_points_coords})
-            predicted_points = gpd.GeoDataFrame(predicted_points, geometry='geometry', crs=connections.crs)
+            predicted_points = geometry_utils.interpolate_line_to_gdf(predicted_line, connections.crs, 100)
 
             # Compute SSPD
             SSPD, d12, d21 = geometry_utils.sspd(ground_truth_line, ground_truth_points, predicted_line, predicted_points)

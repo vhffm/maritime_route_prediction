@@ -101,7 +101,15 @@ def add_ship_metadata(filename, df, join_on='mmsi'):
 
 def main():
     print('test')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--filename')
+    parser.add_argument('--size')
+    parser.add_argument('--start')
+    parser.add_argument('--save_to')
+    args = parser.parse_args()
+    print(args)
 
+    ais_to_trajectory(args.filename, args.size, args.start, args.save_to)
 
 if __name__ == '__main__':
     main()

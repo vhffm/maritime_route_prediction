@@ -12,6 +12,7 @@ import geopandas as gpd
 import pandas as pd
 from scipy.sparse import coo_matrix
 from collections import OrderedDict
+from shapely import ops
 
 
 def calculate_initial_compass_bearing(point1, point2):
@@ -266,6 +267,9 @@ def sspd(trajectory1, points1, trajectory2, points2):
     return SSPD, d12, d21
 
 def get_geo_df(path, connections):
+    '''
+    Converts a sequence of node IDs into a GeoDataFrame containing the route as a list of LineStrings
+    '''
     path_df = pd.DataFrame(columns=['orig', 'dest', 'geometry'])
     for j in range(0, len(path)-1):
         edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
@@ -274,121 +278,74 @@ def get_geo_df(path, connections):
         path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=connections.crs)
     return path_df
 
-def LEGACY_aggregate_edges(waypoints, waypoint_connections):
-    # refine the graph
-    # each edge that intersects the convex hull of another waypoint is divided in segments
-    # the segments are added to the adjacency matrix and the original edge is deleted
-    print('Aggregating graph edges...')
-    start = time.time()  # start timer
-    
-    n_clusters = len(waypoints)
-    coord_dict = {}
-    flag = True
-    for i in range(0, len(waypoint_connections)):
-        edge = waypoint_connections['geometry'].iloc[i]
-        mask = edge.intersects(waypoints['convex_hull'])
-        subset = waypoints[mask][['clusterID', 'cog_before', 'cog_after', 'geometry']]
-        # drop waypoints with traffic direction that does not match edge direction
-        subset = subset[np.abs((subset.cog_before + subset.cog_after)/2 - waypoint_connections.direction.iloc[i]) < 30]
-        # When we find intersections that match the direction of the edge, we split the edge
-        if len(subset)>2:
-            # sort by distance
-            start_point = edge.boundary.geoms[0]
-            subset['distance'] = start_point.distance(subset['geometry'])
-            subset.sort_values(by='distance', inplace=True)
-            # split line in two segments
-            # first segment: between start point and next closest point
-            row = subset.clusterID.iloc[0]
-            col = subset.clusterID.iloc[1]
-            if (row, col) in coord_dict:
-                coord_dict[(row, col)] += waypoint_connections['passages'].iloc[i]  # increase the edge weight for each passage
-            else:
-                coord_dict[(row, col)] = waypoint_connections['passages'].iloc[i]  # create edge if it does not exist yet
-            # second segment: between next clostest point and endpoint
-            row = subset.clusterID.iloc[1]
-            col = waypoint_connections['to'].iloc[i]
-            if (row, col) in coord_dict:
-                coord_dict[(row, col)] += waypoint_connections['passages'].iloc[i]  # increase the edge weight for each passage
-            else:
-                coord_dict[(row, col)] = waypoint_connections['passages'].iloc[i]  # create edge if it does not exist yet
-        # When we don't find intersections, we keep the original edge
-        else:
-            row = waypoint_connections['from'].iloc[i]
-            col = waypoint_connections['to'].iloc[i]
-            if (row, col) in coord_dict:
-                coord_dict[(row, col)] += waypoint_connections['passages'].iloc[i]  # increase the edge weight for each passage
-            else:
-                coord_dict[(row, col)] = waypoint_connections['passages'].iloc[i]  # create edge if it does not exist yet
-    
-    # create refined adjacency matrix
-    row_indices, col_indices = zip(*coord_dict.keys())
-    values = list(coord_dict.values())
-    A_refined = coo_matrix((values, (row_indices, col_indices)), shape=(n_clusters, n_clusters))
-    
-    waypoints.set_geometry('geometry', inplace=True)
-    waypoint_connections_refined = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'passages'])
-    for orig, dest, weight in zip(A_refined.row, A_refined.col, A_refined.data):
-        # add linestring as edge
-        p1 = waypoints[waypoints.clusterID == orig].geometry
-        p2 = waypoints[waypoints.clusterID == dest].geometry
-        edge = LineString([(p1.x, p1.y), (p2.x, p2.y)])
-        # compute the orientation fo the edge (COG)
-        p1 = Point(waypoints[waypoints.clusterID == orig].lon, waypoints[waypoints.clusterID == orig].lat)
-        p2 = Point(waypoints[waypoints.clusterID == dest].lon, waypoints[waypoints.clusterID == dest].lat)
-        direction = calculate_initial_compass_bearing(p1, p2)
-        line = pd.DataFrame([[orig, dest, edge, direction, weight]], 
-                            columns=['from', 'to', 'geometry', 'direction', 'passages'])
-        waypoint_connections_refined = pd.concat([waypoint_connections_refined, line])
-    # save result
-    waypoint_connections_refined = gpd.GeoDataFrame(waypoint_connections_refined, geometry='geometry', crs=waypoints.crs)
-    
-    end = time.time()  # end timer
-    print(f'Aggregated {len(waypoint_connections)} edges to {len(waypoint_connections_refined)} edges (Time elapsed: {(end-start)/60:.2f} minutes)')
-    if len(waypoint_connections) == len(waypoint_connections_refined):
-        flag = False
-        print(f'Edge aggregation finished.')
-    
-    return A_refined, waypoint_connections_refined, flag
+def node_sequence_to_linestring(sequence, connections):
+    '''
+    Converts a sequence of node IDs into a shapely LineString
+    ====================================
+    Params:
+    sequence: list of waypoint IDs
+    connections: GeoDataFrame containing the connections between waypoints
+    ====================================
+    Returns:
+    line: edge sequence between waypoints as a single shapely linestring
+    '''
+    line = []
+    for j in range(0, len(sequence)-1):
+        segment = connections[(connections['from'] == sequence[j]) & (connections['to'] == sequence[j+1])].geometry.item()
+        line.append(segment)
+    line = MultiLineString(line)
+    line = ops.linemerge(line)
+    return line
 
-def LEGACY_find_WP_intersections(trajectory, waypoints):
+def interpolate_line_to_gdf(line, crs, interval=100):
     '''
-    given a trajectory, find all waypoint intersections in the correct order
+    Interpolates a shapely linestring and returns a GeoDataFrame with the interpolated points
+    ====================================
+    Params:
+    line: shapely linestring to be interpolated
+    crs: Coordinate Reference System for GeoDataFrame
+    interval: integer to specify the distance between interpolated points
+    ====================================
+    Returns:
+    points_gdf: GeoDataFrame containing the interpolated points in crs format
     '''
-    max_distance = 50
-    max_angle = 30
+    n_points = int(line.length / interval)
+    if n_points < 5:
+        n_points = 5
+    points = [line.interpolate(dist) for dist in range(0, int(line.length)+1, n_points)]
+    points_coords = [Point(point.x, point.y) for point in points]  # interpolated points on edge sequence
+    points_df = pd.DataFrame({'geometry': points_coords})
+    points_gdf = gpd.GeoDataFrame(points_df, geometry='geometry', crs=crs)
     
-    # simplify trajectory
-    simplified_trajectory = mpd.DouglasPeuckerGeneralizer(trajectory).generalize(tolerance=10)
-    simplified_trajectory.add_direction()
-    trajectory_segments = simplified_trajectory.to_line_gdf()
+    return points_gdf
+
+def clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints):
+    '''
+    Clips a trajectory to a trajectory segment between two waypoints
+    ====================================
+    Params:
+    trajectory: MovingPandas trajectory object
+    WP1_id: ID of the first waypoint
+    WP2_id: ID of the second waypoint
+    waypoints: GeoDataFrame containing waypoints
+    ====================================
+    Returns:
+    clipped_line: Shapely LineString of the clipped trajectory
+    clipped_points: Points on the clipped trajectory as a GeoDataFrame 
+    '''
+    traj_points = trajectory.to_point_gdf()
+    # clip trajectory to the segment between origin and destination waypoint
+    WP1 = waypoints[waypoints.clusterID==WP1_id]['geometry'].item()  # coordinates of waypoint WP1
+    WP2 = waypoints[waypoints.clusterID==WP2_id]['geometry'].item()  # coordinates of waypoint WP2
+    idx1 = np.argmin(WP1.distance(traj_points.geometry))  # index of trajectory point closest to WP1
+    idx2 = np.argmin(WP2.distance(traj_points.geometry))  # index of trajectory point closest to WP2
+    # safeguard against errors caused by roundtrips
+    if idx2 <= idx1:
+        idx1 = 0
+        idx2 = -1
+    t1 = traj_points.index[idx1]  # get time at passage of waypoint WP1
+    t2 = traj_points.index[idx2]  # get time at passage of waypoint WP2
+    clipped_line = trajectory.get_linestring_between(t1, t2)  # clipped trajectory as linestring
+    clipped_points = traj_points.iloc[idx1:idx2]  # clipped trajectory as points
     
-    # filter waypoints: only consider waypoints within a certain distance to the trajectory
-    distances = trajectory.distance(waypoints['convex_hull'])
-    mask = distances < max_distance
-    close_wps = waypoints[mask]
-    passages = []  # initialize ordered list of waypoint passages per line segment
-    for i in range(0, len(trajectory_segments)-1):
-        segment = trajectory_segments.iloc[i]
-        # distance of each segment to the selection of close waypoints
-        distance_to_line = segment['geometry'].distance(close_wps['convex_hull'])  # distance between line segment and waypoint convex hull  
-        distance_to_origin = segment['geometry'].boundary.geoms[0].distance(close_wps['geometry'])  # distance between first point of segment and waypoint centroids (needed for sorting)
-        close_wps['distance_to_line'] = distance_to_line.tolist()
-        close_wps['distance_to_origin'] = distance_to_origin.tolist()
-        # angle between line segment and mean traffic direction in each waypoint
-        WP_cog_before = close_wps['cog_before'] 
-        WP_cog_after  = close_wps['cog_after']
-        trajectory_cog = segment['direction']
-        #print('WP COG before: ', WP_cog_before, 'WP COG after: ', WP_cog_after, 'Trajectory COG: ', trajectory_cog)
-        close_wps['angle_before'] = np.abs(WP_cog_before - trajectory_cog + 180) % 360 - 180
-        close_wps['angle_after'] = np.abs(WP_cog_after - trajectory_cog + 180) % 360 - 180
-        # the line segment is associated with the waypoint, when its distance and angle is less than a threshold
-        mask = ((close_wps['distance_to_line']<max_distance) & 
-                (np.abs(close_wps['angle_before'])<max_angle) & 
-                (np.abs(close_wps['angle_after'])<max_angle))
-        passed_wps = close_wps[mask]
-        #print(close_wps[['clusterID', 'distance_to_line', 'angle_before', 'angle_after']])
-        # ensure correct ordering of waypoint passages
-        passed_wps.sort_values(by='distance_to_origin', inplace=True)
-        passages.extend(passed_wps['clusterID'].tolist())
-        
-    return list(OrderedDict.fromkeys(passages))
+    return clipped_line, clipped_points

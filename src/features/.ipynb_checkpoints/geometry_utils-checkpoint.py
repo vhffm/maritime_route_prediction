@@ -235,22 +235,14 @@ def distance_points_to_line(points, line):
     return distances
 
 def evaluate_edge_sequence(edge_sequence, connections, idx1, idx2, num_points, eval_traj, eval_points):
-    multi_line = []
-    for j in range(0, len(edge_sequence)-1):
-        line = connections[(connections['from'] == edge_sequence[j]) & (connections['to'] == edge_sequence[j+1])].geometry.item()
-        multi_line.append(line)
-    multi_line = MultiLineString(multi_line)
-    multi_line = shapely.ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+    line = node_sequence_to_linestring(edge_sequence, connections)
     # measure distance between the multi_line and the trajectory
     if idx2 == idx1:
-        SSPD = eval_point.distance(multi_line)
+        SSPD = eval_points.distance(line)
     else:
         # get the SSPD between trajectory and edge sequence
-        interpolated_points = [multi_line.interpolate(dist) for dist in range(0, int(multi_line.length)+1, int(multi_line.length/num_points)+1)]
-        interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
-        interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
-        interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=connections.crs)
-        SSPD, d12, d21 = sspd(eval_traj, eval_points['geometry'], multi_line, interpolated_points['geometry'])
+        interpolated_points = interpolate_line_to_gdf(line, connections.crs, interval=100)
+        SSPD, d12, d21 = sspd(eval_traj, eval_points['geometry'], line, interpolated_points['geometry'])
     return SSPD
     
 

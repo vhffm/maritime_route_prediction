@@ -5,7 +5,6 @@ import numpy as np
 from datetime import timedelta, datetime
 from shapely.geometry import Point, LineString, MultiLineString
 from shapely import ops
-import networkx as nx
 import matplotlib.pyplot as plt
 import folium
 import time

@@ -248,7 +248,7 @@ def evaluate_edge_sequence(edge_sequence, connections, idx1, idx2, num_points, e
 
 def sspd(trajectory1, points1, trajectory2, points2):
     '''
-    Symmetrized Segment Path Distance between two trajectories
+    Symmetrized Segment Path Distance between two linestrings
     '''
     d12 = points1.distance(trajectory2)
     SPD12 = np.mean(d12)
@@ -289,7 +289,7 @@ def node_sequence_to_linestring(sequence, connections):
     line = ops.linemerge(line)
     return line
 
-def interpolate_line_to_gdf(line, crs, interval=100):
+def interpolate_line_to_gdf(line, crs, interval=100, n_points=-1):
     '''
     Interpolates a shapely linestring and returns a GeoDataFrame with the interpolated points
     ====================================
@@ -301,9 +301,10 @@ def interpolate_line_to_gdf(line, crs, interval=100):
     Returns:
     points_gdf: GeoDataFrame containing the interpolated points in crs format
     '''
-    n_points = int(line.length / interval)
-    if n_points < 5:
-        n_points = 5
+    if n_points == -1:
+        n_points = int(line.length / interval)
+        if n_points < 5:
+            n_points = 5
     points = [line.interpolate(dist) for dist in range(0, int(line.length)+1, n_points)]
     points_coords = [Point(point.x, point.y) for point in points]  # interpolated points on edge sequence
     points_df = pd.DataFrame({'geometry': points_coords})

@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from datetime import timedelta, datetime
 from sklearn.cluster import DBSCAN, HDBSCAN, OPTICS
 from scipy.sparse import coo_matrix
+from scipy.stats import halfnorm
 from shapely.geometry import Point, LineString, MultiLineString
 from shapely import ops
 from collections import OrderedDict
@@ -353,7 +354,7 @@ class MaritimeTrafficNetwork:
         self.waypoint_connections = new_waypoint_connections
         self.G = G
     
-    def prune_graph(self, min_passages):
+    def prune_graph(self, min_passages, graph='original'):
         '''
         Prune the traffic graph. 
         Criteria:
@@ -362,9 +363,17 @@ class MaritimeTrafficNetwork:
             ... it has a weight < min_passages and there is an alternative path between u and v shorter than 5 edges
         '''
         print('Pruning...')
-        G_pruned = self.G.copy()
-        G_temp = self.G.copy()
-        connections_pruned = self.waypoint_connections.copy()
+        if graph == 'original':
+            G_pruned = self.G.copy()
+            G_temp = self.G.copy()
+            connections_pruned = self.waypoint_connections.copy()
+        elif graph == 'refined':
+            G_pruned = self.G_refined.copy()
+            G_temp = self.G_refined.copy()
+            connections_pruned = self.waypoint_connections_refined.copy()
+        else:
+            print('Specify a valid graph to prune. Either "original" for the original graph or "refined" for the refined graph.')
+            return
 
         edges_to_remove = []
         
@@ -491,16 +500,37 @@ class MaritimeTrafficNetwork:
                 # update connections dataframe with number of passages
                 ind = connections_refined[(connections_refined['from'] == u) & (connections_refined['to'] == v)].index
                 connections_refined.loc[ind, 'passages'] = G_refined[u][v]['weight']
-                # update average speed along edge
+                
+                # compute speed features along edge
                 speeds_u_v = speeds[u, v, :].todense()
-                speed_mean = speeds_u_v.sum() / np.count_nonzero(speeds_u_v)
+                speed_distribution = speeds_u_v[speeds_u_v > 0]
+                speed_mean = np.mean(speed_distribution)
+                speed_std = np.std(speed_distribution)
+                speed_95_perc_confidence = [speed_mean+1.96*speed_std, speed_mean-1.96*speed_std]
                 G_refined[u][v]['speed_mean'] = speed_mean
+                G_refined[u][v]['speed_std'] = speed_std
+                G_refined[u][v]['speed_95_perc_confidence'] = speed_95_perc_confidence
+                G_refined[u][v]['speed_distribution'] = speed_distribution
                 connections_refined.loc[ind, 'speed_mean'] = speed_mean
+                connections_refined.loc[ind, 'speed_std'] = speed_std
+                connections_refined.loc[ind, 'speed_95_perc_confidence'] = str(speed_95_perc_confidence)
+                connections_refined.loc[ind, 'speed_distribution'] = str(speed_distribution.tolist())
+                
                 # update average cross track distance along edge
                 cross_dists_u_v = cross_dists[u, v, :].todense()
-                cross_dist_mean = cross_dists_u_v.sum() / np.count_nonzero(speeds_u_v)
-                G_refined[u][v]['cross_track_dist_mean'] = cross_dist_mean
-                connections_refined.loc[ind, 'cross_track_dist_mean'] = cross_dist_mean
+                cross_dist_distribution = cross_dists_u_v[cross_dists_u_v > 0]
+                cross_dist_std = np.sqrt(np.sum(cross_dist_distribution**2)/len(cross_dist_distribution))  # assuming normal distribution with mean 0
+                #cross_dist_mean = np.sqrt(2/np.pi)*cross_dist_std
+                #loc, scale = halfnorm.fit(cross_dist_distribution, floc=0)
+                #cross_dists_mean = halfnorm.mean(loc=0, scale=scale) 
+                #cross_dists_std = halfnorm.std(loc=0, scale=scale)
+                cross_dist_95_perc_confidence = 1.96*cross_dist_std  # assuming normal distribution with mean 0
+                G_refined[u][v]['cross_track_dist_std'] = cross_dist_std
+                G_refined[u][v]['cross_track_dist_95_perc_confidence'] = cross_dist_95_perc_confidence
+                G_refined[u][v]['cross_track_dist_distribution'] = cross_dist_distribution
+                connections_refined.loc[ind, 'cross_track_dist_std'] = cross_dist_std
+                connections_refined.loc[ind, 'cross_track_dist_95_perc_confidence'] = cross_dist_95_perc_confidence
+                connections_refined.loc[ind, 'cross_track_dist_distribution'] = str(cross_dist_distribution.tolist())
                                      
         # Actually remove the edges after iterating through all of them
         for u, v in edges_to_remove:
@@ -1004,6 +1034,12 @@ class MaritimeTrafficNetwork:
         print(f'Mean distance      = {np.mean(distances):.2f} m')
         print(f'Median distance    = {np.median(distances):.2f} m')
         print(f'Standard deviation = {np.std(distances):.2f} m \n')
+
+        # assuming a half normal distribution of distances, compute distribution parameters
+        dist_array = np.array(distances)
+        loc, scale = halfnorm.fit(dist_array, floc=0)  # scale is the standard deviation of the underlying normal distribution
+        mean_hnd = halfnorm.mean(loc=0, scale=scale)
+        std_hnd = halfnorm.std(loc=0, scale=scale)
         
         # Plot results
         fig, axes = plt.subplots(1, 3, figsize=(12, 6))
@@ -1035,6 +1071,9 @@ class MaritimeTrafficNetwork:
         summary = {'Mean distance':np.mean(distances),
                    'Median distance':np.median(distances),
                    'Standard deviation':np.std(distances),
+                   'HND_scale':scale,
+                   'HND_mean':mean_hnd,
+                   'HND_std':std_hnd,
                    'Fraction NaN':percentage_nan,
                    'Fraction success':len(all_evaluation_results[all_evaluation_results.message=='success']) / len(all_evaluation_results),
                    'mean fraction covered': mean_fraction_covered}
@@ -1113,6 +1152,7 @@ class MaritimeTrafficNetwork:
             connections = self.waypoint_connections_pruned.copy()
         elif refined:
             connections = self.waypoint_connections_refined.copy()
+            connections = connections.drop(['speed_distribution', 'cross_track_dist_distribution'], axis=1)
         else:
             connections = self.waypoint_connections.copy()
         connections = connections[connections['passages'] >= min_passages]

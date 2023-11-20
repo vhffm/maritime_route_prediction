@@ -469,10 +469,10 @@ class MaritimeTrafficNetwork:
                 t1 = traj_points.index[0]  # get time at passage of waypoint u
                 t2 = traj_points.index[-1]  # get time at passage of waypoint v
                 length = traj_segment.length  # length of the segment between u and v
-                time_diff = (t2-t1).total_seconds()  # time needed to get from u to v
-                try:
+                if t2>t1:
+                    time_diff = (t2-t1).total_seconds()  # time needed to get from u to v
                     speed = length / time_diff  # average speed between u and v
-                except:
+                else:
                     speed = 0
                 speeds[u, v, i] = speed
                 # compute SSPD between edge and trajectory segment
@@ -1081,7 +1081,7 @@ class MaritimeTrafficNetwork:
         all_paths = gpd.GeoDataFrame(all_paths, geometry='geometry', crs=self.crs)
         return all_paths, all_evaluation_results, summary, fig
     
-    def map_waypoints(self, detailed_plot=False, center=[59, 5]):
+    def map_waypoints(self, detailed_plot=False, center=[59, 5], opacity=1):
         # plotting
         if detailed_plot:
             columns = ['geometry', 'mmsi']  # columns to be plotted
@@ -1111,20 +1111,20 @@ class MaritimeTrafficNetwork:
         eastbound.set_geometry('geometry', inplace=True)
         map = eastbound[columns_points].explore(m=map, name='cluster centroids (eastbound)', legend=False,
                                                 marker_kwds={'radius':3},
-                                                style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':1})
+                                                style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':opacity, 'opacity':opacity})
         eastbound.set_geometry('convex_hull', inplace=True, crs=self.crs)
         map = eastbound[columns_hull].explore(m=map, name='cluster convex hulls (eastbound)', legend=False,
-                                              style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2})
+                                              style_kwds={'color':'green', 'fillColor':'green', 'fillOpacity':0.2, 'opacity':opacity})
         
         # plot westbound cluster centroids
         westbound = cluster_centroids[(cluster_centroids.cog_after >= 180) & (cluster_centroids.speed >= 2.0)]
         westbound.set_geometry('geometry', inplace=True)
         map = westbound[columns_points].explore(m=map, name='cluster centroids (westbound)', legend=False,
                                                 marker_kwds={'radius':3},
-                                                style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':1})
+                                                style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':opacity, 'opacity':opacity})
         westbound.set_geometry('convex_hull', inplace=True, crs=self.crs)
         map = westbound[columns_hull].explore(m=map, name='cluster convex hulls (westbound)', legend=False,
-                                              style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':0.2})
+                                              style_kwds={'color':'red', 'fillColor':'red', 'fillOpacity':0.2, 'opacity':opacity})
         
         # plot stop cluster centroids
         stops = cluster_centroids[cluster_centroids.speed < 2.0]
@@ -1132,20 +1132,20 @@ class MaritimeTrafficNetwork:
             stops.set_geometry('geometry', inplace=True)
             map = stops[columns_points].explore(m=map, name='cluster centroids (stops)', legend=False,
                                                 marker_kwds={'radius':3},
-                                                style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':1})
+                                                style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':opacity, 'opacity':opacity})
             stops.set_geometry('convex_hull', inplace=True, crs=self.crs)
             map = stops[columns_hull].explore(m=map, name='cluster convex hulls (stops)', legend=False,
-                                              style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2})
+                                              style_kwds={'color':'blue', 'fillColor':'blue', 'fillOpacity':0.2, 'opacity':opacity})
         #folium.LayerControl().add_to(map)
 
         return map
 
-    def map_graph(self, pruned=False, refined=False, center=[59, 5], min_passages=1, line_weight=1):
+    def map_graph(self, pruned=False, refined=False, center=[59, 5], min_passages=1, line_weight=1, opacity=1):
         '''
         Visualization function to map the maritime traffic network graph
         '''
         # basemap with waypoints and traffic
-        map = self.map_waypoints(detailed_plot=False, center=center)
+        map = self.map_waypoints(detailed_plot=False, center=center, opacity=opacity)
 
         # add connections
         if pruned:
@@ -1160,9 +1160,9 @@ class MaritimeTrafficNetwork:
         eastbound = connections[(connections.direction < 180)]
         westbound = connections[(connections.direction >= 180)]
         map = westbound.explore(m=map, name='westbound graph edges', legend=False,
-                                style_kwds={'weight':line_weight, 'color':'red', 'opacity':0.7})
+                                style_kwds={'weight':line_weight, 'color':'red', 'opacity':opacity})
         map = eastbound.explore(m=map, name='eastbound graph edges', legend=False,
-                                style_kwds={'weight':line_weight, 'color':'green', 'opacity':0.7})
+                                style_kwds={'weight':line_weight, 'color':'green', 'opacity':opacity})
         return map
     
     def plot_graph_canvas(self, pruned=False, refined=False):

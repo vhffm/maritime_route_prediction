@@ -267,7 +267,7 @@ def get_geo_df(path, connections):
         edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
         temp = pd.DataFrame([[path[j], path[j+1], edge]], columns=['orig', 'dest', 'geometry'])
         path_df = pd.concat([path_df, temp])
-        path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=connections.crs)
+    path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=connections.crs)
     return path_df
 
 def node_sequence_to_linestring(sequence, connections):

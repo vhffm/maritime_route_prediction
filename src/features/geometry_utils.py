@@ -283,6 +283,7 @@ def node_sequence_to_linestring(sequence, connections):
     '''
     line = []
     for j in range(0, len(sequence)-1):
+        #print(sequence[j], sequence[j+1])
         segment = connections[(connections['from'] == sequence[j]) & (connections['to'] == sequence[j+1])].geometry.item()
         line.append(segment)
     line = MultiLineString(line)
@@ -342,3 +343,9 @@ def clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints):
     clipped_points = traj_points.iloc[idx1:idx2]  # clipped trajectory as points
     
     return clipped_line, clipped_points
+
+def is_valid_path(G, path):
+    '''
+    Returns True if path is a valid path on G
+    '''
+    return all([(path[i],path[i+1]) in G.edges() for i in range(len(path)-1)])

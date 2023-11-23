@@ -1140,10 +1140,16 @@ class MaritimeTrafficNetwork:
 
         return map
 
-    def map_graph(self, pruned=False, refined=False, center=[59, 5], min_passages=1, line_weight=1, opacity=1):
+    def map_graph(self, pruned=False, refined=False, location='stavanger', min_passages=1, line_weight=1, opacity=1):
         '''
         Visualization function to map the maritime traffic network graph
         '''
+        if location=='stavanger':
+            center=[59, 5]
+        elif location=='tromso':
+            center=[69, 19]
+        else:
+            center=[59, 10.5]
         # basemap with waypoints and traffic
         map = self.map_waypoints(detailed_plot=False, center=center, opacity=opacity)
 

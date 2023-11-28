@@ -34,20 +34,37 @@ def ais_to_trajectory(filename, size, start, save_to):
     # enrich with ship metadata
     metadata_filename = '../../data/external/seilas-2022.csv'
     df = add_ship_metadata(metadata_filename, df)
+    df['date_time_utc'] = pd.to_datetime(df['date_time_utc'])
     
     # convert to GeoDataFrame
     gdf = gpd.GeoDataFrame(df, geometry=gpd.points_from_xy(df.lon, df.lat), crs="EPSG:4326")
     df = []  # free memory
 
-    # drop duplicate AIS data (reported by multiple stations)
+    # drop duplicate AIS data
     before = len(gdf)
-    gdf.drop_duplicates(subset = ['mmsi', 'lat', 'lon'],
-                    keep = 'first', inplace=True)
-    after = len(gdf)
-    print(f'{before-after} superfluous AIS messages dropped')
+    #gdf.drop_duplicates(subset = ['mmsi', 'lat', 'lon'],
+    #                keep = 'first', inplace=True)
+    # filter for nav_status
+    nav_status_filter = [0, 2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, -99] # ships that are not moored, anchored or aground
+    filtered_gdf = gdf[gdf['nav_status'].isin(nav_status_filter)]
+    nav_filtered = len(filtered_gdf)
+    # filter for duplicates (within 5 minutes)
+    duplicates = (filtered_gdf.duplicated(subset=['mmsi', 'lat', 'lon'], keep=False))
+    timeframe = timedelta(minutes=5)
+    duplicates_gdf = filtered_gdf[duplicates]
+    duplicates_gdf_sorted = duplicates_gdf.sort_values(by=['mmsi', 'lon', 'lat'])
+    duplicates_gdf_sorted['timeframe'] = duplicates_gdf_sorted.groupby(['mmsi', 'lon', 'lat'])['date_time_utc'].diff()
+    to_be_deleted_gdf = duplicates_gdf_sorted[duplicates_gdf_sorted['timeframe'].lt(timeframe)]
+    indices_to_be_deleted = to_be_deleted_gdf.index  # Get indices to be deleted
+    filtered_gdf = filtered_gdf.drop(indices_to_be_deleted)  # Remove rows by index from filtered_gdf
+    
+    after = len(filtered_gdf)
+    print(f'{before-after} superfluous AIS messages dropped, thereof')
+    print(f'   {before-nav_filtered} messages with irrelevant nav_status and')
+    print(f'   {nav_filtered-after} duplicate messages.')
 
     # convert to trajectories
-    trajectories = mpd.TrajectoryCollection(gdf.iloc[start:start+size], traj_id_col='mmsi', 
+    trajectories = mpd.TrajectoryCollection(filtered_gdf.iloc[start:start+size], traj_id_col='mmsi', 
                                             obj_id_col='mmsi', t='date_time_utc')
     
     # add a trajectory observation gap splitter
@@ -74,8 +91,8 @@ def ais_to_trajectory(filename, size, start, save_to):
 
     # save to file    
     final_gdf = split_trajectories.to_point_gdf()
-    #final_gdf['imo_nr'] = final_gdf['imo_nr'].astype(str)
-    #final_gdf['length'] = final_gdf['length'].astype(str)
+    final_gdf['imo_nr'] = final_gdf['imo_nr'].astype(str)
+    final_gdf['length'] = final_gdf['length'].astype(str)
     final_gdf.to_parquet(save_to)
 
 def add_ship_metadata(filename, df, join_on='mmsi'):

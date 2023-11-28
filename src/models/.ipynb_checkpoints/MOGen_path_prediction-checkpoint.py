@@ -24,8 +24,9 @@ class MOGenPathPrediction:
     
     def __init__(self):
         self.model = []
+        self.type = 'MOGen'
 
-    def train(self, paths, max_order, model_selection=True):
+    def train(self, paths, max_order, model_selection=True, training_mode='partial'):
         '''
         Trains a MOGen model based on observed paths in a network
         ====================================
@@ -35,14 +36,26 @@ class MOGenPathPrediction:
                    If we want to make predictions specifying a sequence of n start nodes, max_order needs to be at least n.
         model_selection: If True, then MOGen trains a model up to max_order, including all models < max_order
                          If False, only a model with max_order is trained
+        training_mode: 'full' - model is trained on input paths and sub-paths, e.g. when an input path is [1, 2, 3, 4], the model is trained on
+                                [1, 2, 3, 4], [2, 3, 4], [3, 4]
+                       'partial' - model is trained only on actual input paths
         ====================================    
         '''
         # create a pathpy path collection and add all training paths to it
         pc = pp.PathCollection()
         for raw_path in paths:
-            str_path = [str(i) for i in raw_path]  # convert node IDs to strings
-            path = pp.Path(*str_path)
-            pc.add(path)
+            # train model on path and all sub-paths
+            if training_mode == 'full':
+                for j in range(0, len(raw_path)-1):
+                    sub_path = raw_path[j:]
+                    str_path = [str(i) for i in sub_path]  # convert node IDs to strings
+                    path = pp.Path(*str_path)
+                    pc.add(path)
+            # train model on original paths only
+            else:
+                str_path = [str(i) for i in raw_path]  # convert node IDs to strings
+                path = pp.Path(*str_path)
+                pc.add(path)
     
         # initialize MOGen Model
         # creates MOGen models up to order max_order
@@ -147,9 +160,9 @@ class MOGenPathPrediction:
         # predict n_walks path from start_node
         predicted_paths = self.predict_paths(start_node, n_walks, G, verbose=verbose)
         sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, G, n_walks)
-        while (n_walks < 10000) & (flag == False):
+        while (n_walks < 4000) & (flag == False):
             n_walks = n_walks*2
-            print(f'No path was found. Retrying with more random walks {n_walks}')
+            #print(f'No path was found. Retrying with more random walks {n_walks}')
             predicted_paths = self.predict_paths(start_node, n_walks, G, verbose=verbose)
             sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, G, n_walks)
         # only retain the desired number of predicted alternatives
@@ -165,7 +178,7 @@ class MOGenPathPrediction:
         total_sum = sum(sorted_predictions.values())
         normalized_sorted_predictions = {key: value / total_sum for key, value in sorted_predictions.items()}
 
-        return normalized_sorted_predictions
+        return normalized_sorted_predictions, flag
 
     def return_valid_paths(self, predicted_paths, start_node, end_node, G, n_walks):
         sums_dict = {}
@@ -188,68 +201,7 @@ class MOGenPathPrediction:
                 # ... or increase its probability
                 else:
                     sums_dict[clipped_node_sequence] += val*n_walks
-        return sums_dict, flag
-
-    def evaluate_next_node(self, paths, G, connections, n_start_nodes=1, n_walks=100):
-        '''
-        Evaluation
-        '''
-        classification_results = {'correct':0, 'wrong':0, 'none':0}
-        SSPDs = []
-        start = time.time()
-        count = 0  # initialize a counter that keeps track of the progress
-        percentage = 0  # percentage of progress
-        print(f'Evaluating Next Node prediction on {len(paths)} paths:')
-        print(f'Progress:', end=' ', flush=True)
-        # iterate over all paths
-        for path in paths:
-            # iterate through all path nodes
-            for j in range(0, len(path)-n_start_nodes):
-                start_node = path[j:j+n_start_nodes]  # set start node
-                try:
-                    # predict next node
-                    prediction = self.predict_next_nodes(start_node, G, n_steps=1, n_predictions=1, n_walks=n_walks, verbose=False)  # predict next node
-                except:
-                    classification_results['none'] += 1
-                    continue
-                else:
-                    # in case of successful prediction compute accuracy and SSPD
-                    predicted_node = next(iter(prediction.keys()))  # convert node format
-                    predicted_node = [x for x in predicted_node][0]  # convert node format
-                    true_node = path[j+n_start_nodes]
-                    if true_node == predicted_node:
-                        classification_results['correct'] += 1
-                        SSPDs.append(0)
-                    else:
-                        classification_results['wrong'] += 1
-                        # compute SSPD between true and predicted node sequence
-                        true_sequence = [start_node[-1], true_node]
-                        ground_truth_line = geometry_utils.node_sequence_to_linestring(true_sequence, connections)
-                        ground_truth_points = geometry_utils.interpolate_line_to_gdf(ground_truth_line, connections.crs)
-                        predicted_sequence = [start_node[-1], predicted_node]
-                        predicted_line = geometry_utils.node_sequence_to_linestring(predicted_sequence, connections)
-                        predicted_points = geometry_utils.interpolate_line_to_gdf(predicted_line, connections.crs, 100)
-                        SSPD, d12, d21 = geometry_utils.sspd(ground_truth_line, ground_truth_points, predicted_line, predicted_points)
-                        SSPDs.append(SSPD)
-            # report progress
-            count += 1
-            if count/len(paths) > 0.1:
-                count = 0
-                percentage += 10
-                print(f'{percentage}%...', end='', flush=True)
-        print('Done!')
-        
-        end = time.time()
-        print(f'Time elapsed: {(end-start)/60:.2f} minutes')
-
-        # report results
-        accuracy = classification_results['correct'] / (classification_results['correct']+classification_results['wrong'])
-        print(f'Number of predictions made: {classification_results["correct"]+classification_results["wrong"]}')
-        print(f'Accuracy: {accuracy:.3f}')
-        print(f'Number of unsuccessful predictions (no start node): {classification_results["none"]}')
-        SSPDs = np.array(SSPDs)
-        print(f'Mean SSPD: {np.mean(SSPDs)}m ({np.mean(SSPDs[SSPDs>0])}m)')
-                              
+        return sums_dict, flag                            
 
 
         

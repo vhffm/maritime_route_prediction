@@ -13,7 +13,6 @@ sys.path.append('../models')
 sys.path.append('../features')
 # import modules
 import geometry_utils
-from maritime_traffic_network import MaritimeTrafficNetwork
 
 def get_bounding_box(gdf):
     """

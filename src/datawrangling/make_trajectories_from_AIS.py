@@ -15,7 +15,7 @@ def ais_to_trajectory(filename, size, start, save_to):
     This script takes raw AIS data as input, cleans and enriches the data and saves it to a parquet file.
     
     Cleaning steps:
-    * Drop duplicates (AIS messages can be recorded multiple times by different stations, e.g. satellite, coastal station etc)
+    * Drop duplicates (AIS messages can be recorded multiple times by different stations, e.g. satellite, coastal station etc) that have a time difference of < 5 minutes
       Only the first registered message at a certain location is retained
     * The data is split into trajectories, where each trajectory receives a unique ID. 
       A trajectory is split into sub-trajectories, when the observation gap between AIS messages exceeds 10min and if the resulting
@@ -50,9 +50,9 @@ def ais_to_trajectory(filename, size, start, save_to):
     nav_filtered = len(filtered_gdf)
     # filter for duplicates (within 5 minutes)
     duplicates = (filtered_gdf.duplicated(subset=['mmsi', 'lat', 'lon'], keep=False))
-    timeframe = timedelta(minutes=5)
     duplicates_gdf = filtered_gdf[duplicates]
     duplicates_gdf_sorted = duplicates_gdf.sort_values(by=['mmsi', 'lon', 'lat'])
+    timeframe = timedelta(minutes=5)
     duplicates_gdf_sorted['timeframe'] = duplicates_gdf_sorted.groupby(['mmsi', 'lon', 'lat'])['date_time_utc'].diff()
     to_be_deleted_gdf = duplicates_gdf_sorted[duplicates_gdf_sorted['timeframe'].lt(timeframe)]
     indices_to_be_deleted = to_be_deleted_gdf.index  # Get indices to be deleted
@@ -106,6 +106,9 @@ def add_ship_metadata(filename, df, join_on='mmsi'):
     # merge dataframes on mmsi
     merge_columns = ['mmsi', 'bredde', 'dypgaaende', 'skipstype', 'skipsgruppe', 'fartoynavn']
     df = df.merge(df_meta[merge_columns], on='mmsi', how='left')
+    df['skipsgruppe'] = df['skipsgruppe'].replace(to_replace=['Last', 'Fisk', 'Passasjer', 'Slep'], 
+                                                  value=['Cargo', 'Fishing', 'Passenger', 'Tug'])
+    df['skipsgruppe'].fillna('Unknown', inplace=True)
     
     # output report about join
     n_matching = len(pd.Series(list(set(df_meta['mmsi']).intersection(set((df['mmsi']))))))

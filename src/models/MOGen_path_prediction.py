@@ -67,9 +67,9 @@ class MOGenPathPrediction:
     
         self.model = model
 
-    def predict_paths(self, start_node, n_paths, G, seed=42, verbose=True):
+    def sample_paths(self, start_node, n_paths, G, seed=42, verbose=True):
         '''
-        Predicts a certain number of paths from a start node
+        Samples a certain number of paths from a start node
         ====================================
         Params:
         start_node: Single start node or start node sequence, for example: [1], or [1, 2, 3]
@@ -91,12 +91,12 @@ class MOGenPathPrediction:
         predictions = self.model.predict(no_of_paths=n_paths, max_order=self.model.max_order, start_node=start_node_str, seed=seed, verbose=verbose)
         # sort predictions by frequency of occurrence
         sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
-        sorted_predictions_dict={}
+        normalized_predictions_dict={}
         for key, val in sorted_predictions.items():
             node_sequence = tuple(int(x) for x in key)
-            sorted_predictions_dict[node_sequence] = val/n_paths  # probability of occurrence
+            normalized_predictions_dict[node_sequence] = val/n_paths  # probability of occurrence
         
-        return sorted_predictions_dict
+        return normalized_predictions_dict
 
     def predict_next_nodes(self, start_node, G, n_steps=1, n_predictions=1, n_walks=100, verbose=True):
         '''
@@ -114,7 +114,7 @@ class MOGenPathPrediction:
         predictions: dictionary of nodes sequences and their predicted probabilities
         '''
         # predict n_walks path from start_node
-        predicted_paths = self.predict_paths(start_node, n_walks, G, verbose=verbose)
+        predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
         index = len(start_node)
         sums_dict = {}
         for key, val in predicted_paths.items():
@@ -151,19 +151,19 @@ class MOGenPathPrediction:
                     Sequence cannot be longer than max_order of the MOGen model
         end_node: node ID of end node, e.g. 5
         G: the graph underlying the traffic network (networkx graph object)
-        n_predictions: number of node candidates to predict
-        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction of next node(s)
+        n_predictions: number of path candidates to predict
+        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction
         ====================================
         Returns:
         predictions: dictionary of paths and their predicted probabilities
         '''
-        # predict n_walks path from start_node
-        predicted_paths = self.predict_paths(start_node, n_walks, G, verbose=verbose)
+        # predict n_walks paths from start_node
+        predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
         sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, G, n_walks)
         while (n_walks < 4000) & (flag == False):
             n_walks = n_walks*2
             #print(f'No path was found. Retrying with more random walks {n_walks}')
-            predicted_paths = self.predict_paths(start_node, n_walks, G, verbose=verbose)
+            predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
             sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, G, n_walks)
         # only retain the desired number of predicted alternatives
         if n_predictions == -1:

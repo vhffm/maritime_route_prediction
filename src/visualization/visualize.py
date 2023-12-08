@@ -36,7 +36,7 @@ def get_bounding_box(gdf):
     bbox = bbox.groupby(['ID'])['geometry'].apply(lambda x: LineString(x.tolist()))
     return bbox
 
-def traffic_raster_overlay(df, map):
+def traffic_raster_overlay(df, map, overlay_name='tracks'):
     '''
     creates a hexbin plot as raster overlay from a dataframe
     returns a folium map object
@@ -75,7 +75,7 @@ def traffic_raster_overlay(df, map):
     bounds=[[df.total_bounds[1], df.total_bounds[0]], [df.total_bounds[3], df.total_bounds[2]]]
     folium.raster_layers.ImageOverlay(
         image=plot_img_np,
-        name='tracks',
+        name=overlay_name,
         bounds=bounds,
         opacity=0.2,
         interactive=True,

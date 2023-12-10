@@ -256,7 +256,7 @@ class GretelPathPrediction:
         while (n_walks < 10000) & (flag == False):
             n_walks = n_walks*2
             #print(f'No path was found. Retrying with more random walks {n_walks}')
-            predicted_paths = self.sample_paths(start_node, n_walks, verbose=verbose)
+            predicted_paths = self.sample_paths(start_node, n_walks)
             sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, n_walks)
         # only retain the desired number of predicted alternatives
         if n_predictions == -1:

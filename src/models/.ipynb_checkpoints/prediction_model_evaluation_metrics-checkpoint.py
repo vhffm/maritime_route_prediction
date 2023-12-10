@@ -130,6 +130,89 @@ def evaluate(model, prediction_task, test_paths, test_trajectories, network, n_s
     
     return evaluation_results, fig
 
+def evaluate_given_predictions(prediction_task, path_df, test_trajectories, network, n_start_nodes=1, eval_mode='path'):
+    '''
+    Evaluates a set of true paths against predicted paths
+    Origin and destination of each test path are fed to the prediction model. The predicted path is then evalauted against the ground truth path using SSPD as a metric.
+    Returns a dataframe with all evaluated predictions and a summary of the model performance
+    prediction_type: 'next_nodes', 'path'
+    '''    
+    connections = network.waypoint_connections.copy()
+    waypoints = network.waypoints.copy()
+    G = network.G.copy()
+
+    # prepare dataframe for results
+    evaluation_results = pd.DataFrame(columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+    
+    start = time.time()
+    print(f'Evaluating {len(path_df)} samples for {prediction_task} prediction task')
+    print(f'Progress:', end=' ', flush=True)
+    count = 0  # initialize a counter that keeps track of the progress
+    percentage = 0  # percentage of progress
+    # iterate through all test examples
+    for i in range (0, len(path_df)):
+        true_path = path_df['ground_truth'].iloc[i]
+        predicted_path = path_df['prediction'].iloc[i]
+        mmsi = path_df['mmsi'].iloc[i]
+        start_node = true_path[0:n_start_nodes]
+
+        # Prediction task: path from start to end node
+        if prediction_task == 'path':
+            end_node = true_path[-1]
+            SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
+                                           test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+                     
+        # Prediction task: next node(s)         
+        elif prediction_task == 'next_nodes':
+            end_node = predicted_path[-1]
+            true_path = true_path[0:n_start_nodes+1]
+            if predicted_path == true_path:
+                SSPD, distances = 0, [0]
+            else:
+                SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
+                                               test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+        
+        # write results to dataframe
+        temp = pd.DataFrame([[mmsi, true_path, predicted_path, distances, SSPD]], columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+        evaluation_results = pd.concat([evaluation_results, temp])
+        
+        # report progress
+        count += 1
+        if count/len(path_df) > 0.1:
+            count = 0
+            percentage += 10
+            print(f'{percentage}%...', end='', flush=True)
+            
+    print('Done!')
+    print('\n')
+    end = time.time()
+    print(f'Time elapsed: {(end-start)/60:.2f} minutes')
+    print('\n')
+
+    # find number of unsuccessful predictions
+    nan_mask = evaluation_results.isna().any(axis=1)
+    
+    print(f'Percentage of unsuccessful predictions: {nan_mask.sum() / len(evaluation_results)*100:.2f}%')
+    print(f'Mean SSPD: {np.mean(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
+    print(f'Median SSPD: {np.median(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
+
+    # Plot results
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+    # Plot 1: Box plot of SSPD
+    axes[0].boxplot(evaluation_results[~nan_mask]['SSPD'])
+    axes[0].set_title('Distribution of SSPD')
+    axes[0].set_ylabel('SSPD (m)')
+
+    # Plot 2: Histogram of SSPD
+    axes[1].hist(evaluation_results[~nan_mask]['SSPD'], bins=np.arange(0, 2000, 50).tolist())
+    axes[1].set_title('Distribution of SSPD')
+    axes[1].set_xlabel('SSPD (m)')
+    plt.tight_layout()
+    plt.show()
+    
+    return evaluation_results, fig
+
 def compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, connections, start_node, end_node, waypoints):
     '''
     Computes the SSPD and the distribution of distance between a predicted path and a ground truth path or ground truth trajectory

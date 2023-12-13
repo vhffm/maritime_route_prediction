@@ -2,11 +2,11 @@
 
 [data]
 
-name = one_start_node_to_target_tromso_small
+name = tromso_small
 workspace = ../../models/gretel_prediction_models/tromso_small
-dataset = one_start_node_to_target
-input_directory = one_start_node_to_target
-max_trajectory_length = 2
+dataset = node2node
+input_directory = node2node
+max_trajectory_length = 101
 min_trajectory_length = 2
 
 k_closest_nodes = 1
@@ -20,12 +20,12 @@ extract_coord_features = false
 optimizer = Adam
 
 ; can be RMSE, target_only, dot_loss, start_target_only, nll_loss
-loss = log_dot_loss
+loss = target_only
 
 ; device can be cpu or cuda:0
 device = cpu
 
-lr = .01
+lr = .0005
 momentum = 0.5
 batch_size = 5
 patience = 1000
@@ -34,7 +34,7 @@ patience = 1000
 overfit1 = false
 
 shuffle_samples = True
-number_epoch = 50
+number_epoch = 30
 seed = 0
 train_test_ratio = 0.8/0.2
 
@@ -46,7 +46,7 @@ self_loop_weight = 0.01
 diffusion_k_hops = 60
 diffusion_hidden_dimension = 1
 parametrized_diffusion = false
-; next or destination
+; next or target or start_to_target
 target_prediction = next
 latent_transformer_see_target = false
 initial_edge_transformer = false

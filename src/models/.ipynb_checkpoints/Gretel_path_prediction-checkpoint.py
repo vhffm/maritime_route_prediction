@@ -5,7 +5,7 @@ import sys
 import time
 from collections import Counter
 import heapq
-
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorboardX
 import torch
@@ -31,6 +31,10 @@ class GretelPathPrediction:
         self.config = None
         self.type = 'Gretel'
         self.task = None
+        self.train_metrics = {'target_probability':[], 'choice_accuracy':[], 'choice_accuracy_deg3':[], 
+                              'precision_top1':[], 'precision_top5':[], 'path_nll':[], 'path_nll_deg3':[]}
+        self.test_metrics = {'target_probability':[], 'choice_accuracy':[], 'choice_accuracy_deg3':[], 
+                              'precision_top1':[], 'precision_top5':[], 'path_nll':[], 'path_nll_deg3':[]}
 
     def train(self, config_file, directory, task):
         '''
@@ -125,7 +129,18 @@ class GretelPathPrediction:
             model.train()
             train_epoch(model, graph, optimizer, config, train_trajectories, pairwise_node_features)
         
-            # VALID and TEST metrics computation
+            # TRAIN and TEST metrics computation
+            '''
+            train_evaluator = evaluate(
+                model,
+                graph,
+                train_trajectories,
+                pairwise_node_features,
+                create_evaluator,
+                dataset="TRAIN",
+            )
+            '''
+            
             test_evaluator = evaluate(
                 model,
                 graph,
@@ -134,6 +149,15 @@ class GretelPathPrediction:
                 create_evaluator,
                 dataset="TEST",
             )
+
+            # append train and test metrics to dictionary
+            '''
+            for key, v in train_evaluator.metrics.items():
+                self.train_metrics[key].append(v.mean())
+            '''
+            for key, v in test_evaluator.metrics.items():
+                self.test_metrics[key].append(v.mean())
+            
             valid_evaluator = None
             if use_validation_set:
                 valid_evaluator = evaluate(
@@ -175,7 +199,7 @@ class GretelPathPrediction:
         self.model = model
         self.config = config
 
-    def sample_paths(self, start_node, n_walks=1000, max_path_length=100):
+    def sample_paths(self, start_node, n_walks=200, max_path_length=100):
         '''
         Samples a certain number of paths from a start node
         ====================================
@@ -193,6 +217,7 @@ class GretelPathPrediction:
         observations[start_node] = 1
         
         # masks that contain the number of observations, start nodes and target nodes
+        # modify this for more than one start node
         observed, starts, targets = generate_masks(
                     trajectory_length=2,
                     number_observations=self.config.number_observations,
@@ -237,7 +262,49 @@ class GretelPathPrediction:
 
         return normalized_samples
 
-    def predict_path(self, start_node, end_node, max_path_length=100, n_predictions=1, n_walks=1000):
+    def predict_next_nodes(self, start_node, n_steps=1, n_predictions=1, n_walks=200):
+        '''
+        Given a start node or a start node sequence, the model predicts the next node(s)
+        ====================================
+        Params:
+        start_node: Single start node or start node sequence, for example: [1], or [1, 2, 3]
+                    Sequence cannot be longer than max_order of the MOGen model
+        G: the graph underlying the traffic network (networkx graph object)
+        n_predictions: number of node candidates to predict
+        n_steps: the maximum length of the predicted path ahead
+        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction of next node(s)
+        ====================================
+        Returns:
+        predictions: dictionary of nodes sequences and their predicted probabilities
+        '''
+        if n_steps < 1:
+            print('Number of steps n_steps needs to be > 0. Setting n_steps to 100.')
+            n_steps = 100
+        # predict n_walks path from start_node
+        predicted_paths = self.sample_paths(start_node, n_walks=n_walks, max_path_length=n_steps+1)
+        index = len(start_node)
+        sums_dict = {}
+        for key, val in predicted_paths.items():
+            node_sequence = key[index:index+n_steps]
+            # Either append path to the dictionary of predictions...
+            if node_sequence not in sums_dict:
+                sums_dict[node_sequence] = val
+            # ... or increase its probability
+            else:
+                sums_dict[node_sequence] += val
+        # only retain the desired number of predicted alternatives
+        if n_predictions == -1:
+            predictions = heapq.nlargest(len(sums_dict), sums_dict.items(), key=lambda x: x[1])
+        else:
+            predictions = heapq.nlargest(np.min([len(sums_dict), n_predictions]), sums_dict.items(), key=lambda x: x[1])
+        
+        # convert to dictionary and sort
+        predictions = dict(predictions)
+        sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
+         
+        return sorted_predictions
+    
+    def predict_path(self, start_node, end_node, max_path_length=100, n_predictions=1, n_walks=200):
         '''
         Given a start node and an end node, the model predicts likely paths between these
         ====================================
@@ -292,3 +359,152 @@ class GretelPathPrediction:
                 else:
                     sums_dict[clipped_node_sequence] += val*n_walks
         return sums_dict, flag
+
+    def plot_train_test_metrics(self, test_only=False):
+        '''
+        Plot metrics for training and test set for each epoch
+        '''
+        # Create subplots
+        num_keys = len(self.test_metrics)
+        fig, axes = plt.subplots(nrows=3, ncols=3, figsize=(8, 8))
+        
+        # Loop through each key and create a subplot
+        for i, key in enumerate(self.test_metrics.keys()):
+            if test_only==False:
+                train_values = self.train_metrics[key]
+            test_values = self.test_metrics[key]
+            x = np.arange(len(test_values))
+            
+            # get the axis to plot on
+            row, col = divmod(i, 3)
+            ax = axes[row, col]
+            
+            # plot
+            if test_only==False:
+                ax.plot(x, train_values, label='Train', color='b')
+            ax.plot(x, test_values, label='Test', color='r')
+
+            # set axis limits
+            if key in ['target_probability', 'choice_accuracy', 'choice_accuracy_deg3', 
+                       'precision_top1', 'precision_top5']:
+                ax.set_ylim([0,1])
+            
+            # add labels
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel(key)
+            ax.set_title(key)
+            ax.legend()
+        
+        plt.tight_layout()
+        plt.show()
+
+    def predict(self, start_node, end_node, number_steps):
+        ######## BROKEN #########
+        # build a tensor of shape (n_nodes, ) that is 1 for the start node and 0 otherwise
+        number_steps = torch.tensor([number_steps])
+        n_nodes = self.graph.n_node
+        observations = torch.zeros(2, n_nodes)
+        observations[0][start_node] = 1
+        observations[1][end_node] = 1
+        
+        # masks that contain the number of observations, start nodes and target nodes
+        observed, starts, targets = generate_masks(
+                    trajectory_length=observations.shape[0],
+                    number_observations=self.config.number_observations,
+                    predict=self.config.target_prediction,
+                    with_interpolation=self.config.with_interpolation,
+                    device=self.config.device,
+                )
+        print(observations.shape[0])
+        print(number_steps)
+        print(observations)
+        print(observed)
+        print(starts)
+        print(targets)
+        
+        # compute diffusions
+        diffusion_graph = (
+                    self.graph if not self.config.diffusion_self_loops else self.graph.add_self_loops()
+                )
+
+        # check shapes
+        assert observed.shape[0] == starts.shape[0] == targets.shape[0]
+        n_pred = observed.shape[0]
+
+        # baseline
+        if self.model.diffusion_graph_transformer is None and self.model.direction_edge_mlp is None:
+            # if not a random graph, take the uniform random graph
+            if (
+                self.graph.edges.shape != torch.Size([self.graph.n_edge, 1])
+                or ((self.graph.out_degree - 1.0).abs() > 1e-5).any()
+            ):
+                rw_graphs = self.graph.update(
+                    edges=torch.ones([self.graph.n_edge, n_pred], device=self.graph.device)
+                )
+                rw_graphs = rw_graphs.softmax_weights()
+            else:
+                rw_graphs = self.graph
+            virtual_coords = None
+        else:
+            # compute diffusions
+            virtual_coords = self.model.compute_diffusion(diffusion_graph, observations)
+            if self.model.double_way_diffusion:
+                virtual_coords_reversed = self.model.compute_diffusion(
+                    diffusion_graph.reverse_edges(), observations
+                )
+                virtual_coords = torch.cat([virtual_coords, virtual_coords_reversed])
+
+            # compute rw graph
+            rw_graphs = self.model.compute_rw_weights(
+                virtual_coords, observed, None, targets, self.graph
+            )
+
+        n_pred = len(starts)
+        n_node = observations.shape[1]
+        device = observations.device
+        rw_weights = rw_graphs.edges.transpose(0, 1)
+
+        start_distributions = observations[starts]  # batch x n_node
+        rw_steps = self.model.compute_number_steps(starts, targets, number_steps)
+
+        predict_distributions = torch.zeros(n_pred, n_node, device=device)
+
+        for pred_id in range(n_pred):
+            rw_graph = rw_graphs.update(edges=rw_weights[pred_id])
+
+            max_step_rw = None
+            if self.model.rw_expected_steps:
+                max_step_rw = rw_steps[pred_id]
+
+            start_nodes = start_distributions[pred_id]
+            print(start_nodes[self.graph.senders].shape)
+            print(self.graph.edges.shape)
+            if self.model.rw_non_backtracking:
+                edge_start = start_nodes[self.graph.senders] * self.graph.edges.transpose(0,1)
+                edge_signal = edge_start
+                for _ in range(number_steps[0] - 1):
+                    edge_signal = rw_graph @ edge_signal
+
+                node_signal = scatter_add(
+                    src=edge_signal, index=self.graph.receivers, dim_size=self.n_node)
+
+                
+            else:
+                predict_distributions[pred_id] = rw_graph.random_walk(start_nodes, max_step_rw)
+        
+        '''
+        # make prediction
+        predictions, _, rw_weights = self.model(
+                    observations,
+                    self.graph,
+                    diffusion_graph,
+                    observed=observed,
+                    starts=starts,
+                    targets=targets,
+                    pairwise_node_features=None,
+                    number_steps=number_steps,
+                )
+        '''
+
+        #return predictions, rw_weights
+        return node_signal, edge_signal

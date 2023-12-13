@@ -1,2 +1,0 @@
-202204_waypoints_DP10_HDBSCAN13_tromso_full_UTM 
-202204_waypoints_DP10_HDBSCAN13_tromso_full_UTM_202205_paths.csv

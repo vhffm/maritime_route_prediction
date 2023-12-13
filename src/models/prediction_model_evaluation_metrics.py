@@ -34,7 +34,7 @@ def evaluate(model, prediction_task, test_paths, test_trajectories, network, n_s
 
     
     # prepare dataframe for results
-    evaluation_results = pd.DataFrame(columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+    evaluation_results = pd.DataFrame(columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD', 'choice_accuracy'])
     
     start = time.time()
     print(f'Evaluating {model.type} model on {len(test_paths)} samples for {prediction_task} prediction task')
@@ -58,15 +58,21 @@ def evaluate(model, prediction_task, test_paths, test_trajectories, network, n_s
                     predicted_path, SSPD, distances = [], np.nan, np.nan
                 else:
                     if flag:
-                        predicted_path = start_node + [x for x in list(prediction)[0]]  # appends the start node to the predicted path
-                        SSPD, distances = compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, connections, start_node[0], end_node, waypoints)
+                        # evaluate
+                        predicted_path = start_node + [x for x in list(prediction)[0]]  # prepends the start node to the predicted path
+                        SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
+                                                       test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+                        choice_accuracy = compute_choice_accuracy(true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:])
                     else:
                         predicted_path, SSPD, distances = [], np.nan, np.nan
+                        choice_accuracy = 0
             elif model.type == 'Dijkstra':
                 start = start_node[-1] # since Dijkstra can only handle one start node, we take the last node of the start node sequence as start node
                 predicted_path = model.predict(start, end_node)
                 predicted_path = start_node[0:-1] + predicted_path  # prepend remainder of start node
-                SSPD, distances = compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, connections, start_node[0], end_node, waypoints)
+                SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
+                                               test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+                choice_accuracy = compute_choice_accuracy(true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:])
             else:
                 print(f'{model.type} is not a supported model type for prediction type {prediction_task}. Supported model types are {supported_model_types[prediction_type]}')
                 return False
@@ -78,19 +84,23 @@ def evaluate(model, prediction_task, test_paths, test_trajectories, network, n_s
                 except:
                     predicted_path, SSPD, distances = [], np.nan, np.nan
                 else:
-                    predicted_path = start_node + [x for x in list(prediction)[0]]  # appends the start node to the predicted path
+                    predicted_path = start_node + [x for x in list(prediction)[0]]  # prepends the start node to the predicted path
                     end_node = predicted_path[-1]
                     true_path = true_path[0:n_start_nodes+1]
                     if predicted_path == true_path:
                         SSPD, distances = 0, [0]
+                        choice_accuracy = 1.0
                     else:
-                        SSPD, distances = compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, connections, start_node[0], end_node, waypoints)
+                        SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
+                                                       test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+                        choice_accuracy = compute_choice_accuracy(true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:])
             else:
                 print(f'{model.type} is not a supported model type for prediction type {prediction_task}. Supported model types are {supported_model_types[prediction_type]}')
                 return False
         
         # write results to dataframe
-        temp = pd.DataFrame([[mmsi, true_path, predicted_path, distances, SSPD]], columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+        temp = pd.DataFrame([[mmsi, true_path, predicted_path, distances, SSPD, choice_accuracy]], 
+                            columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD', 'choice_accuracy'])
         evaluation_results = pd.concat([evaluation_results, temp])
         
         # report progress
@@ -112,6 +122,7 @@ def evaluate(model, prediction_task, test_paths, test_trajectories, network, n_s
     print(f'Percentage of unsuccessful predictions: {nan_mask.sum() / len(evaluation_results)*100:.2f}%')
     print(f'Mean SSPD: {np.mean(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
     print(f'Median SSPD: {np.median(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
+    print(f'Mean choice_accuracy: {np.mean(evaluation_results[~nan_mask]["choice_accuracy"]):.4f}')
 
     # Plot results
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
@@ -142,7 +153,7 @@ def evaluate_given_predictions(prediction_task, path_df, test_trajectories, netw
     G = network.G.copy()
 
     # prepare dataframe for results
-    evaluation_results = pd.DataFrame(columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+    evaluation_results = pd.DataFrame(columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD', 'choice_accuracy'])
     
     start = time.time()
     print(f'Evaluating {len(path_df)} samples for {prediction_task} prediction task')
@@ -161,6 +172,7 @@ def evaluate_given_predictions(prediction_task, path_df, test_trajectories, netw
             end_node = true_path[-1]
             SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
                                            test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+            choice_accuracy = compute_choice_accuracy(true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:])
                      
         # Prediction task: next node(s)         
         elif prediction_task == 'next_nodes':
@@ -168,12 +180,15 @@ def evaluate_given_predictions(prediction_task, path_df, test_trajectories, netw
             true_path = true_path[0:n_start_nodes+1]
             if predicted_path == true_path:
                 SSPD, distances = 0, [0]
+                choice_accuracy = 1.0
             else:
                 SSPD, distances = compute_sspd(eval_mode, true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:], 
                                                test_trajectories, mmsi, connections, start_node[-1], end_node, waypoints)
+                choice_accuracy = compute_choice_accuracy(true_path[n_start_nodes-1:], predicted_path[n_start_nodes-1:])
         
         # write results to dataframe
-        temp = pd.DataFrame([[mmsi, true_path, predicted_path, distances, SSPD]], columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD'])
+        temp = pd.DataFrame([[mmsi, true_path, predicted_path, distances, SSPD, choice_accuracy]], 
+                            columns=['mmsi', 'true_path', 'predicted_path', 'distances', 'SSPD', 'choice_accuracy'])
         evaluation_results = pd.concat([evaluation_results, temp])
         
         # report progress
@@ -195,6 +210,7 @@ def evaluate_given_predictions(prediction_task, path_df, test_trajectories, netw
     print(f'Percentage of unsuccessful predictions: {nan_mask.sum() / len(evaluation_results)*100:.2f}%')
     print(f'Mean SSPD: {np.mean(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
     print(f'Median SSPD: {np.median(evaluation_results[~nan_mask]["SSPD"]):.2f}m')
+    print(f'Mean choice_accuracy: {np.mean(evaluation_results[~nan_mask]["choice_accuracy"]):.4f}')
 
     # Plot results
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
@@ -237,3 +253,16 @@ def compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, 
     SSPD, d12, d21 = geometry_utils.sspd(ground_truth_line, ground_truth_points, predicted_line, predicted_points)
     distances = d12.tolist() + d21.tolist()
     return SSPD, distances
+
+def compute_choice_accuracy(true_path, predicted_path):
+    '''
+    Choice accuracy measures how accurate the prediction is at each crossroad of the ground-truth path
+    Example:
+    true_path = [1, 2, 3, 4]
+    predicted_path = [1, 2, 5, 4]
+    choice_accuracy = 1/3  (correct decisions: 1->2, the rest are incorrect decisions)
+    '''
+    truth_pairs = [(true_path[j], true_path[j+1]) for j in range(0, len(true_path)-1)]
+    prediction_pairs = [(predicted_path[j], predicted_path[j+1]) for j in range(0, len(predicted_path)-1)]
+
+    return sum(correct_choice in prediction_pairs for correct_choice in truth_pairs) / len(truth_pairs)

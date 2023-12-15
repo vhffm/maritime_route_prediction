@@ -11,6 +11,7 @@ import tensorboardX
 import torch
 from termcolor import colored
 from typing import Optional, List, Callable
+import pandas as pd
 
 from gretel.config import Config, config_generator
 from gretel.graph import Graph
@@ -220,7 +221,6 @@ class GretelPathPrediction:
             observations[i][start_node] = 1
         
         # masks that contain the number of observations, start nodes and target nodes
-        # modify this for more than one start node
         observed, starts, targets = generate_masks(
                     trajectory_length=observations.shape[0]+1,
                     number_observations=self.config.number_observations,
@@ -403,113 +403,53 @@ class GretelPathPrediction:
         plt.tight_layout()
         plt.show()
 
-    def predict(self, start_node, end_node, number_steps):
-        ######## BROKEN #########
-        # build a tensor of shape (n_nodes, ) that is 1 for the start node and 0 otherwise
-        number_steps = torch.tensor([number_steps])
-        n_nodes = self.graph.n_node
-        observations = torch.zeros(2, n_nodes)
-        observations[0][start_node] = 1
-        observations[1][end_node] = 1
-        
-        # masks that contain the number of observations, start nodes and target nodes
-        observed, starts, targets = generate_masks(
-                    trajectory_length=observations.shape[0],
-                    number_observations=self.config.number_observations,
-                    predict=self.config.target_prediction,
-                    with_interpolation=self.config.with_interpolation,
-                    device=self.config.device,
-                )
-        print(observations.shape[0])
-        print(number_steps)
-        print(observations)
-        print(observed)
-        print(starts)
-        print(targets)
-        
-        # compute diffusions
-        diffusion_graph = (
-                    self.graph if not self.config.diffusion_self_loops else self.graph.add_self_loops()
-                )
-
-        # check shapes
-        assert observed.shape[0] == starts.shape[0] == targets.shape[0]
-        n_pred = observed.shape[0]
-
-        # baseline
-        if self.model.diffusion_graph_transformer is None and self.model.direction_edge_mlp is None:
-            # if not a random graph, take the uniform random graph
-            if (
-                self.graph.edges.shape != torch.Size([self.graph.n_edge, 1])
-                or ((self.graph.out_degree - 1.0).abs() > 1e-5).any()
-            ):
-                rw_graphs = self.graph.update(
-                    edges=torch.ones([self.graph.n_edge, n_pred], device=self.graph.device)
-                )
-                rw_graphs = rw_graphs.softmax_weights()
-            else:
-                rw_graphs = self.graph
-            virtual_coords = None
-        else:
-            # compute diffusions
-            virtual_coords = self.model.compute_diffusion(diffusion_graph, observations)
-            if self.model.double_way_diffusion:
-                virtual_coords_reversed = self.model.compute_diffusion(
-                    diffusion_graph.reverse_edges(), observations
-                )
-                virtual_coords = torch.cat([virtual_coords, virtual_coords_reversed])
-
-            # compute rw graph
-            rw_graphs = self.model.compute_rw_weights(
-                virtual_coords, observed, None, targets, self.graph
-            )
-
-        n_pred = len(starts)
-        n_node = observations.shape[1]
-        device = observations.device
-        rw_weights = rw_graphs.edges.transpose(0, 1)
-
-        start_distributions = observations[starts]  # batch x n_node
-        rw_steps = self.model.compute_number_steps(starts, targets, number_steps)
-
-        predict_distributions = torch.zeros(n_pred, n_node, device=device)
-
-        for pred_id in range(n_pred):
-            rw_graph = rw_graphs.update(edges=rw_weights[pred_id])
-
-            max_step_rw = None
-            if self.model.rw_expected_steps:
-                max_step_rw = rw_steps[pred_id]
-
-            start_nodes = start_distributions[pred_id]
-            print(start_nodes[self.graph.senders].shape)
-            print(self.graph.edges.shape)
-            if self.model.rw_non_backtracking:
-                edge_start = start_nodes[self.graph.senders] * self.graph.edges.transpose(0,1)
-                edge_signal = edge_start
-                for _ in range(number_steps[0] - 1):
-                    edge_signal = rw_graph @ edge_signal
-
-                node_signal = scatter_add(
-                    src=edge_signal, index=self.graph.receivers, dim_size=self.n_node)
-
-                
-            else:
-                predict_distributions[pred_id] = rw_graph.random_walk(start_nodes, max_step_rw)
-        
+    def predict(self, prediction_task, paths, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100, max_path_length=150):
         '''
-        # make prediction
-        predictions, _, rw_weights = self.model(
-                    observations,
-                    self.graph,
-                    diffusion_graph,
-                    observed=observed,
-                    starts=starts,
-                    targets=targets,
-                    pairwise_node_features=None,
-                    number_steps=number_steps,
-                )
+        Given a prediction task, this method returns a prediction based on an input dataset
         '''
-
-        #return predictions, rw_weights
-        return node_signal, edge_signal
+        result_list=[]
+        
+        print(f'Making predictions for {len(paths)} samples')
+        print(f'Progress:', end=' ', flush=True)
+        count = 0  # initialize a counter that keeps track of the progress
+        percentage = 0  # percentage of progress
+        
+        for index, row in paths.iterrows():
+            mmsi = row['mmsi']
+            path = row['path']
+            start_node = path[0:n_start_nodes]
+            end_node = path[-1]
+           
+            if prediction_task == 'path':
+                prediction, flag = self.predict_path(start_node, end_node, max_path_length=max_path_length, 
+                                                     n_predictions=n_predictions, n_walks=n_walks)
+                if flag:
+                    for key, value in prediction.items():
+                        predicted_path = [x for x in key]
+                        result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                            'prediction': tuple(predicted_path), 'probability':value})
+                else:
+                    predicted_path = []
+                    result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 'prediction': predicted_path, 'probability':np.nan})
+            
+            elif prediction_task == 'next_nodes':
+                prediction = self.predict_next_nodes(start_node, n_steps=n_steps, n_predictions=n_predictions, n_walks=n_walks)
+                for key, value in prediction.items():
+                    predicted_path = [x for x in key]
+                    result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                        'prediction': tuple(predicted_path), 'probability':value})
+            
+            else:
+                print('invalid prediction task')
+            
+            # report progress
+            count += 1
+            if count/len(paths) > 0.1:
+                count = 0
+                percentage += 10
+                print(f'{percentage}%...', end='', flush=True)
+                    
+        print('Done!')
+        
+        result_df = pd.DataFrame(result_list) 
+        return result_df

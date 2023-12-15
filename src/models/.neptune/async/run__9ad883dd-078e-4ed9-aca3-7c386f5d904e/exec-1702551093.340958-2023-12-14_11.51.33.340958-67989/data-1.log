@@ -1,0 +1,4 @@
+{"obj": {"type": "AssignString", "path": ["monitoring", "af4ddd14", "hostname"], "value": "MacBook-Pro-von-Jan-Hendrik.local"}, "version": 1}
+{"obj": {"type": "AssignString", "path": ["monitoring", "af4ddd14", "pid"], "value": "67989"}, "version": 2}
+{"obj": {"type": "AssignString", "path": ["monitoring", "af4ddd14", "tid"], "value": "8119869120"}, "version": 3}
+{"obj": {"type": "AssignString", "path": ["path_format"], "value": "start2target"}, "version": 4}

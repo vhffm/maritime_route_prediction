@@ -140,7 +140,7 @@ def map_prediction_and_ground_truth(predictions, start_node, trajectory, true_pa
     # generate plottable dataframe of predicted paths
     predicted_paths = pd.DataFrame(columns=['path', 'geometry', 'probability'])
     for key, value in predictions.items():
-        path = start_node + [x for x in key]
+        path = [x for x in key]
         line = geometry_utils.node_sequence_to_linestring(path, network.waypoint_connections)
         temp = pd.DataFrame([[tuple(path), line, value]], columns=['path', 'geometry', 'probability'])
         predicted_paths = pd.concat([predicted_paths, temp])

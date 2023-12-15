@@ -115,15 +115,15 @@ class MOGenPathPrediction:
         '''
         # predict n_walks path from start_node
         predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
-        index = len(start_node)
+        n_start_nodes = len(start_node)
         sums_dict = {}
         for key, val in predicted_paths.items():
             if n_steps > 0:
-                node_sequence = key[index:index+n_steps]
+                node_sequence = key[0:n_start_nodes+n_steps]
             else:
-                node_sequence = key[index:]
+                node_sequence = key
             # check if the predicted path is valid on the graph G
-            if geometry_utils.is_valid_path(G, start_node + [x for x in node_sequence]):
+            if geometry_utils.is_valid_path(G, [x for x in node_sequence]):
                 # if the path is valid, either append it to the dictionary of predictions...
                 if node_sequence not in sums_dict:
                     sums_dict[node_sequence] = val
@@ -152,7 +152,7 @@ class MOGenPathPrediction:
         end_node: node ID of end node, e.g. 5
         G: the graph underlying the traffic network (networkx graph object)
         n_predictions: number of path candidates to predict
-        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction of next node(s)
+        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction
         ====================================
         Returns:
         predictions: dictionary of paths and their predicted probabilities
@@ -175,19 +175,18 @@ class MOGenPathPrediction:
         predictions = dict(predictions)
         sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
         # normalize observed predictions, to get probabilities
-        total_sum = sum(sorted_predictions.values())
+        total_sum = sum(sums_dict.values())
         normalized_sorted_predictions = {key: value / total_sum for key, value in sorted_predictions.items()}
 
         return normalized_sorted_predictions, flag
 
     def return_valid_paths(self, predicted_paths, start_node, end_node, G, n_walks):
         sums_dict = {}
-        index = len(start_node)
         flag = False
         for key, val in predicted_paths.items():
-            node_sequence = key[index:]
+            node_sequence = key
             # check if the predicted path is valid on the graph G
-            is_valid_path = geometry_utils.is_valid_path(G, start_node+[x for x in node_sequence])
+            is_valid_path = geometry_utils.is_valid_path(G, [x for x in node_sequence])
             # check if the predicted path is valid and contains the end node
             if (is_valid_path) & (end_node in node_sequence):
                 #print('Success! Found a path to the end node.')
@@ -203,5 +202,63 @@ class MOGenPathPrediction:
                     sums_dict[clipped_node_sequence] += val*n_walks
         return sums_dict, flag                            
 
-
+    def predict(self, prediction_task, paths, G, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100):
+        '''
+        Docstring
+        '''
+        result_list=[]
+        
+        print(f'Making predictions for {len(paths)} samples')
+        print(f'Progress:', end=' ', flush=True)
+        count = 0  # initialize a counter that keeps track of the progress
+        percentage = 0  # percentage of progress
+        
+        for index, row in paths.iterrows():
+            mmsi = row['mmsi']
+            path = row['path']
+            start_node = path[0:n_start_nodes]
+            end_node = path[-1]
+           
+            if prediction_task == 'path':
+                try:
+                    prediction, flag = self.predict_path(start_node, end_node, G, 
+                                                         n_predictions=n_predictions, n_walks=n_walks, verbose=False)
+                    if flag:
+                        for key, value in prediction.items():
+                            predicted_path = [x for x in key]
+                            result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                                'prediction': tuple(predicted_path), 'probability':value})
+                    else:
+                        result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                            'prediction': [], 'probability':np.nan})
+                except:
+                    result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                        'prediction': [], 'probability':np.nan})
+            
+            elif prediction_task == 'next_nodes':
+                try:
+                    prediction = self.predict_next_nodes(start_node, G, n_steps=n_steps, 
+                                                         n_predictions=n_predictions, n_walks=n_walks, verbose=False)
+                    for key, value in prediction.items():
+                        predicted_path = [x for x in key]
+                        result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                            'prediction': tuple(predicted_path), 'probability':value})
+                except:
+                    result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                        'prediction': [], 'probability':np.nan})   
+            
+            else:
+                print('invalid prediction task')
+            
+            # report progress
+            count += 1
+            if count/len(paths) > 0.1:
+                count = 0
+                percentage += 10
+                print(f'{percentage}%...', end='', flush=True)
+                    
+        print('Done!')
+        
+        predictions = pd.DataFrame(result_list)
+        return predictions
         

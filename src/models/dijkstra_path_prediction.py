@@ -46,7 +46,7 @@ class DijkstraPathPrediction:
         
         self.G = G
 
-    def predict(self, orig, dest):
+    def predict_path(self, orig, dest, weight='inverse_weight'):
         '''
         outputs the shortest path in the network using Dijkstra's algorithm.
         :param orig: int, ID of the start waypoint
@@ -54,10 +54,49 @@ class DijkstraPathPrediction:
         '''     
         try:
             # compute shortest path using dijsktra's algorithm (outputs a list of nodes)
-            shortest_path = nx.dijkstra_path(self.G, orig, dest, weight='inverse_weight')
-            return shortest_path
+            shortest_path = nx.dijkstra_path(self.G, orig, dest, weight=weight)
+            return shortest_path, True
         except:
             print(f'Nodes {orig} and {dest} are not connected. Exiting...')
-            return []
+            return [], False
+
+    def predict(self, paths, n_start_nodes=1, weight='inverse_weight'):
+        '''
+        Docstring
+        '''
+        result_list=[]
+        
+        print(f'Making predictions for {len(paths)} samples')
+        print(f'Progress:', end=' ', flush=True)
+        count = 0  # initialize a counter that keeps track of the progress
+        percentage = 0  # percentage of progress
+        
+        for index, row in paths.iterrows():
+            mmsi = row['mmsi']
+            path = row['path']
+            start_node = path[0:n_start_nodes]
+            end_node = path[-1]
+            # predict path
+            predicted_path, flag = self.predict_path(start_node[-1], end_node, weight)
+            predicted_path = start_node[0:-1] + predicted_path  # prepend remainder of start node
+            # save results
+            if flag:
+                result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                    'prediction': tuple(predicted_path), 'probability':1})
+            else:
+                result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 
+                                    'prediction': [], 'probability':np.nan})
+
+            # report progress
+            count += 1
+            if count/len(paths) > 0.1:
+                count = 0
+                percentage += 10
+                print(f'{percentage}%...', end='', flush=True)
+                    
+        print('Done!')
+        
+        predictions = pd.DataFrame(result_list)
+        return predictions
         
             

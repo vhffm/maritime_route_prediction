@@ -199,7 +199,7 @@ class GretelPathPrediction:
         self.model = model
         self.config = config
 
-    def sample_paths(self, start_node, n_walks=200, max_path_length=100):
+    def sample_paths(self, start_nodes, n_walks=200, max_path_length=100):
         '''
         Samples a certain number of paths from a start node
         ====================================
@@ -211,15 +211,18 @@ class GretelPathPrediction:
         Returns:
         normalized_samples: Dictionary of paths and their probability of occurence, sorted by probability (descending)
         '''
-        # build a tensor of shape (n_nodes, ) that is 1 for the start node and 0 otherwise
+        # build a tensor of shape (len(start_node), n_nodes) that is 1 for the start node and 0 otherwise
         n_nodes = self.graph.n_node
-        observations = torch.zeros(n_nodes)
-        observations[start_node] = 1
+        if isinstance(start_nodes, int):
+            start_nodes = [start_nodes]
+        observations = torch.zeros(len(start_nodes), n_nodes)
+        for i, start_node in enumerate(start_nodes):    
+            observations[i][start_node] = 1
         
         # masks that contain the number of observations, start nodes and target nodes
         # modify this for more than one start node
         observed, starts, targets = generate_masks(
-                    trajectory_length=2,
+                    trajectory_length=observations.shape[0]+1,
                     number_observations=self.config.number_observations,
                     predict=self.config.target_prediction,
                     with_interpolation=self.config.with_interpolation,
@@ -249,7 +252,7 @@ class GretelPathPrediction:
         # predictions[0] contains node sequence, predictions[1] the corresponding edge sequence. We only keep the former
         sampled_paths_raw = predictions[0].tolist()
         # if a path is predicted that is shorter than max_path_length, the list is filled with -1. These need to be cut off.
-        sampled_paths = [[element for element in sublist if element != -1] for sublist in sampled_paths_raw]
+        sampled_paths = [start_nodes[:-1] + [element for element in sublist if element != -1] for sublist in sampled_paths_raw]
         
         # Convert each predicted node sequence to a tuple and count occurrences
         counter_dict = Counter(map(tuple, sampled_paths))
@@ -262,7 +265,7 @@ class GretelPathPrediction:
 
         return normalized_samples
 
-    def predict_next_nodes(self, start_node, n_steps=1, n_predictions=1, n_walks=200):
+    def predict_next_nodes(self, start_nodes, n_steps=1, n_predictions=1, n_walks=200):
         '''
         Given a start node or a start node sequence, the model predicts the next node(s)
         ====================================
@@ -281,11 +284,13 @@ class GretelPathPrediction:
             print('Number of steps n_steps needs to be > 0. Setting n_steps to 100.')
             n_steps = 100
         # predict n_walks path from start_node
-        predicted_paths = self.sample_paths(start_node, n_walks=n_walks, max_path_length=n_steps+1)
-        index = len(start_node)
+        predicted_paths = self.sample_paths(start_nodes, n_walks=n_walks, max_path_length=n_steps)
+        index = len(start_nodes)
         sums_dict = {}
         for key, val in predicted_paths.items():
-            node_sequence = key[index:index+n_steps]
+            node_sequence = key
+            if node_sequence[-1] == node_sequence[-2]:
+                node_sequence = node_sequence[:-1]
             # Either append path to the dictionary of predictions...
             if node_sequence not in sums_dict:
                 sums_dict[node_sequence] = val
@@ -304,7 +309,7 @@ class GretelPathPrediction:
          
         return sorted_predictions
     
-    def predict_path(self, start_node, end_node, max_path_length=100, n_predictions=1, n_walks=200):
+    def predict_path(self, start_nodes, end_node, max_path_length=100, n_predictions=1, n_walks=200):
         '''
         Given a start node and an end node, the model predicts likely paths between these
         ====================================
@@ -318,13 +323,13 @@ class GretelPathPrediction:
         predictions: dictionary of paths and their predicted probabilities
         '''
         # predict n_walks paths from start_node
-        predicted_paths = self.sample_paths(start_node, n_walks, max_path_length)
-        sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, n_walks)
+        predicted_paths = self.sample_paths(start_nodes, n_walks, max_path_length)
+        sums_dict, flag = self.return_valid_paths(predicted_paths, start_nodes, end_node, n_walks)
         while (n_walks < 10000) & (flag == False):
             n_walks = n_walks*2
             #print(f'No path was found. Retrying with more random walks {n_walks}')
-            predicted_paths = self.sample_paths(start_node, n_walks)
-            sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, n_walks)
+            predicted_paths = self.sample_paths(start_nodes, n_walks)
+            sums_dict, flag = self.return_valid_paths(predicted_paths, start_nodes, end_node, n_walks)
         # only retain the desired number of predicted alternatives
         if n_predictions == -1:
             predictions = heapq.nlargest(len(sums_dict), sums_dict.items(), key=lambda x: x[1])
@@ -335,7 +340,7 @@ class GretelPathPrediction:
         predictions = dict(predictions)
         sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
         # normalize observed predictions, to get probabilities
-        total_sum = sum(sorted_predictions.values())
+        total_sum = sum(sums_dict.values())
         normalized_sorted_predictions = {key: value / total_sum for key, value in sorted_predictions.items()}
 
         return normalized_sorted_predictions, flag

@@ -349,3 +349,27 @@ def is_valid_path(G, path):
     Returns True if path is a valid path on G
     '''
     return all([(path[i],path[i+1]) in G.edges() for i in range(len(path)-1)])
+
+def split_paths_to_sequences(df, n):
+    '''
+    splits a path into sub_paths of length n
+    example:
+    df =    mmsi   path
+            4781   [1, 2, 3, 4, 5]
+    n = 3
+    
+    result= mmsi   path
+            4781   [1, 2, 3]
+            4781   [2, 3, 4]
+            4781   [3, 4, 5]
+    '''
+    def create_rows(row, n=2):
+        mmsi, path = row
+        return [(mmsi, path[i:i+n]) for i in range(len(path) - n + 1)]
+    
+    # Create a new DataFrame with consecutive elements
+    result = pd.DataFrame(
+        [item for _, row in test_data.iterrows() for item in create_rows(row, n)],
+        columns=['mmsi', 'path']
+    )
+    return result

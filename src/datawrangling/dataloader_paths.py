@@ -2,10 +2,10 @@ import pandas as pd
 from ast import literal_eval
 import numpy as np
 
-def load_path_training_data(path_prefix, network_name, train_dates):
+def load_path_training_data(path_prefix, network_name, train_dates, data_version=''):
     for i in range(0, len(train_dates)):
         train_date = train_dates[i]
-        filename = network_name+'_'+train_date+'_paths.csv'
+        filename = network_name+'_'+train_date+'_paths'+data_version+'.csv'
         training_data = pd.read_csv(path_prefix+filename)
         training_data['path'] = training_data['path'].apply(literal_eval)
         training_data = training_data[training_data['message']=='success']
@@ -18,10 +18,10 @@ def load_path_training_data(path_prefix, network_name, train_dates):
     training_paths = all_training_data['path'].tolist()
     return training_paths
 
-def load_path_test_data(path_prefix, network_name, test_dates, selection_start, selection_end, selection_step):
+def load_path_test_data(path_prefix, network_name, test_dates, selection_start, selection_end, selection_step, data_version=''):
     for i in range(0, len(test_dates)):
         test_date = test_dates[i]
-        filename = network_name+'_'+test_date+'_paths.csv'
+        filename = network_name+'_'+test_date+'_paths'+data_version+'.csv'
         test_data = pd.read_csv(path_prefix+filename)
         test_data['path'] = test_data['path'].apply(literal_eval)
         test_data = test_data[test_data['message']=='success']

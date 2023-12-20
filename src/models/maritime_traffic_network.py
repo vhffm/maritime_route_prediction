@@ -683,7 +683,7 @@ class MaritimeTrafficNetwork:
         end = time.time()
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')      
 
-    def trajectory_to_path_sspd(self, trajectory, verbose=False):
+    def trajectory_to_path_sspd(self, trajectory, algorithm='standard', verbose=False):
         '''
         Find the best path along the graph for a given trajectory and evaluate goodness of fit
         The algorithm contains the following steps:
@@ -834,6 +834,45 @@ class MaritimeTrafficNetwork:
                 message = 'success'
                 if verbose: print('Found path:', path)
                 if verbose: print(mmsi, nx.is_path(G, path))
+
+                if algorithm=='refined':
+                    ## refine path ##
+                    refined_path = [path[0]]
+                    skipped=False
+                    for k in range(0, len(path)-2):
+                        if skipped:
+                            skipped=False
+                            continue
+                        WP1_id = path[k]
+                        WP2_id = path[k+1]
+                        WP3_id = path[k+2]
+                        if geometry_utils.is_valid_path(G_channel, [WP1_id, WP3_id]):
+                            traj12, traj12p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints)
+                            traj23, traj23p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP2_id, WP3_id, waypoints)
+                            traj13, traj13p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP1_id, WP3_id, waypoints)
+                            edge12 = geometry_utils.node_sequence_to_linestring([WP1_id, WP2_id], connections)
+                            edge23 = geometry_utils.node_sequence_to_linestring([WP2_id, WP3_id], connections)
+                            edge13 = geometry_utils.node_sequence_to_linestring([WP1_id, WP3_id], connections)
+                            edge12p = geometry_utils.interpolate_line_to_gdf(edge12, self.crs, n_points=len(traj12p))
+                            edge23p = geometry_utils.interpolate_line_to_gdf(edge23, self.crs, n_points=len(traj23p))
+                            edge13p = geometry_utils.interpolate_line_to_gdf(edge13, self.crs, n_points=len(traj13p))
+                            SSPD12, d12, d21 = geometry_utils.sspd(traj12, traj12p, edge12, edge12p)
+                            SSPD23, d23, d32 = geometry_utils.sspd(traj23, traj23p, edge23, edge23p)
+                            SSPD13, d13, d31 = geometry_utils.sspd(traj13, traj13p, edge13, edge13p)
+                            f123 = np.mean(d12.tolist() + d21.tolist() + d23.tolist() + d32.tolist())
+                            f13 = np.mean(d13.tolist() + d31.tolist())
+                            len123 = edge12.length + edge23.length
+                            len13 = edge13.length
+                            if  f123*len123 > f13*len13:
+                                refined_path.append(WP3_id)
+                                skipped=True
+                            else:
+                                refined_path.append(WP2_id)
+                        else:
+                            refined_path.append(WP2_id)
+                    if refined_path[-1] != path[-1]:
+                        refined_path.append(path[-1])
+                    path = refined_path
                 
         
                 # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
@@ -980,7 +1019,7 @@ class MaritimeTrafficNetwork:
             dijkstra_path_df = gpd.GeoDataFrame(dijkstra_path_df, geometry='geometry', crs=self.crs)
             return dijkstra_path_df
     
-    def evaluate_graph(self, trajectories):
+    def evaluate_graph(self, trajectories, algorithm='refined'):
         '''
         given a selection of trajectories, compute evaluation metrics for the graph
         input:
@@ -999,7 +1038,7 @@ class MaritimeTrafficNetwork:
         # iterate over all evaluation trajectories
         start = time.time()
         for trajectory in trajectories:
-            path, evaluation_results = self.trajectory_to_path_sspd(trajectory)  # evaluate trajectory
+            path, evaluation_results = self.trajectory_to_path_sspd(trajectory, algorithm)  # evaluate trajectory
             all_paths = pd.concat([all_paths, path])
             all_evaluation_results = pd.concat([all_evaluation_results, evaluation_results])
             count += 1
@@ -1209,3 +1248,264 @@ class MaritimeTrafficNetwork:
         
         # Show the plot
         plt.show()
+
+
+    def trajectory_to_path_sspd2(self, trajectory, verbose=False):
+        '''
+        Find the best path along the graph for a given trajectory and evaluate goodness of fit
+        The algorithm contains the following steps:
+        1. Find suitable waypoint close to the origin of the trajectory
+        2. Find suitable waypoint close to the destination of the trajectory
+        3. Find all waypoints passed by the trajectory
+        4. Compute the edge sequence between each pair of passed waypoints that minimizes the SSPD to the trajectory
+        :param trajectory: a single MovingPandas Trajectory object
+        returns:
+        :GeoDataFrame path_df: contains the sequence of edges traversed by a vessel which is closest to its original trajectory
+        :DataFrame evaluation_results: contains metrics for the 'goodness of fit'
+        '''
+        G = self.G_pruned.copy()
+        waypoints = self.waypoints.copy()
+        connections = self.waypoint_connections_pruned.copy()
+        points = trajectory.to_point_gdf()
+        mmsi = points.mmsi.unique()[0]
+        #print(mmsi)
+        if verbose: 
+            print('=======================')
+            print(mmsi)
+            print('=======================')
+        
+        ### GET potential START POINT ###
+        orig_WP, idx_orig, dist_orig = geometry_utils.find_orig_WP(points, waypoints)
+        
+        ### GET potential END POINT ###
+        dest_WP, idx_dest, dist_dest = geometry_utils.find_dest_WP(points, waypoints)
+        if verbose: print('Potential start and end point:', orig_WP, dest_WP)
+
+        ### GET ALL INTERSECTIONS between trajectory and waypoints and a channel around that trajectory that defines the subgraph
+        passages, G_channel = geometry_utils.find_WP_intersections(points, trajectory, waypoints, G, 1000)
+        if verbose: print('Intersections found:', passages)
+        
+        # Distinguish three cases
+        # 1. passages is empty and orig != dest
+        if ((len(passages) == 0) & (orig_WP != dest_WP)):
+            if dist_orig < 100:
+                passages.append(orig_WP)
+            if dist_dest < 100:
+                passages.append(dest_WP)
+        # 2. passages is empty and orig == dest --> nothing we can do here
+        elif ((len(passages) == 0) & (orig_WP == dest_WP)):
+            passages = []
+        # 3. found passages
+        else:
+            # if the potential start waypoint is not in the list of intersections, but close to the origin of the trajectory, add it to the set of passages
+            if ((orig_WP not in passages) & (dist_orig < 100) & (nx.has_path(G, orig_WP, passages[0]))):
+                passages.insert(0, orig_WP)
+            else:
+                orig_WP = passages[0]
+                orig_WP_point = waypoints[waypoints.clusterID==orig_WP]['geometry'].item()
+                idx_orig = np.argmin(orig_WP_point.distance(points.geometry))
+            
+            # if the potential destination waypoint is not in the list of intersections, but close to the destination of the trajectory, add it to the set of passages
+            if ((dest_WP not in passages) & (dist_dest < 100) & (nx.has_path(G, passages[-1], dest_WP))):
+                passages.append(dest_WP)
+            else:
+                dest_WP = passages[-1]
+                dest_WP_point = waypoints[waypoints.clusterID==dest_WP]['geometry'].item()
+                idx_dest = np.argmin(dest_WP_point.distance(points.geometry))
+        if verbose: print('Intersections with start and endpoint:', passages)
+        
+        if len(passages) >= 2:
+            try:
+                if verbose: print('Executing try statement')
+                path = [[passages[0]]] # initialize the best edge sequence traversed by the vessel
+                #eval_distances = []  # initialize list for distances between trajectory and edge sequence
+                # find the edge sequence between each waypoint pair, that MINIMIZES THE DISTANCE between trajectory and edge sequence
+                for i in range(0, len(passages)-1):
+                    if verbose: print('From:', passages[i], ' To:', passages[i+1])
+                    WP1 = waypoints[waypoints.clusterID==passages[i]]['geometry'].item()  # coordinates of waypoint at beginning of edge sequence
+                    WP2 = waypoints[waypoints.clusterID==passages[i+1]]['geometry'].item()  # coordinates of waypoint at end of edge sequence
+                    idx1 = np.argmin(WP1.distance(points.geometry))  # index of trajectory point closest to beginning of edge sequence
+                    idx2 = np.argmin(WP2.distance(points.geometry))  # index of trajectory point closest to end of edge sequence
+                    if verbose: print('Point indices:', idx1, idx2)
+                    # Check if we are moving backwards
+                    if idx2 < idx1:
+                        if verbose: print('going back is not allowed! (inner)')
+                        continue
+                    ### CORE FUNCTION
+                    ### when current waypoint pair is very close, just take the shortest path to save computation time
+                    if (idx2-idx1) <= 3:
+                        if verbose: print('Close waypoints. Taking shortest path')
+                        edge_sequences = nx.all_shortest_paths(G_channel, passages[i], passages[i+1])
+                    # if waypoints are further apart, explore longer paths
+                    else:
+                        # compute length of shortest possible path
+                        min_sequence_length = len(nx.shortest_path(G_channel, passages[i], passages[i+1]))
+                        # if the shortest path is already long, just take the shortest path
+                        if min_sequence_length > 5:
+                            if verbose: print('Far apart waypoints. Taking shortest path.')
+                            edge_sequences = nx.all_shortest_paths(G_channel, passages[i], passages[i+1])
+                        # if the shortest path is short, explore alternative paths
+                        else:
+                            if verbose: print('Far apart waypoints. Exploring all paths with limited length.')
+                            cutoff = 5
+                            edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)
+                            while len(list(edge_sequences)) > 500:
+                                cutoff -= 1
+                                if verbose: print('Too many alternative paths. Reducing cutoff to ', cutoff)
+                                edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)
+                            if verbose: print('Final cutoff ', cutoff)
+                            edge_sequences = nx.all_simple_paths(G_channel, passages[i], passages[i+1], cutoff=cutoff)    
+                    #################
+                    if verbose: print('=======================')
+                    if verbose: print(f'Iterating through edge sequences')
+                    min_mean_distance = np.inf
+                    # iterate over all possible connections
+                    for edge_sequence in edge_sequences:
+                        # create a linestring from the edge sequence
+                        if verbose: print('Edge sequence:', edge_sequence)
+                        multi_line = geometry_utils.node_sequence_to_linestring(edge_sequence,connections)
+                        # measure distance between the multi_line and the trajectory
+                        if idx2 == idx1:
+                            eval_points = points.iloc[idx1]  # trajectory points associated with the edge sequence
+                            eval_point = eval_points['geometry']
+                            SSPD = eval_point.distance(multi_line)
+                        else:
+                            # get the SSPD between trajectory and edge sequence
+                            eval_points = points.iloc[idx1:idx2+1]  # trajectory points associated with the edge sequence
+                            t1 = points.index[idx1]
+                            t2 = points.index[idx2]
+                            eval_traj = trajectory.get_linestring_between(t1, t2)  # trajectory associated with the edge sequence
+                            num_points = len(eval_points)
+                            interpolated_points = [multi_line.interpolate(dist) for dist in range(0, int(multi_line.length)+1, int(multi_line.length/num_points)+1)]
+                            interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
+                            interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
+                            interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=self.crs)
+                            SSPD, d12, d21 = geometry_utils.sspd(eval_traj, eval_points['geometry'], multi_line, interpolated_points['geometry'])
+                            # punish longer edge sequences
+                            SSPD = SSPD * np.max([multi_line.length/eval_traj.length, eval_traj.length/multi_line.length])
+                            if verbose: print('   SSPD:', SSPD)
+                        # when mean distance is smaller than any mean distance encountered before --> save current edge sequence as best edge sequence
+                        if SSPD < min_mean_distance:
+                            min_mean_distance = SSPD
+                            best_sequence = edge_sequence
+                    path.append(best_sequence[1:])
+                    if verbose: print('----------------------')
+                # flatten path
+                path = [item for sublist in path for item in sublist]
+                #eval_distances = [item for sublist in eval_distances for item in sublist]
+                message = 'success'
+                if verbose: print('Found path:', path)
+                if verbose: print(mmsi, nx.is_path(G, path))
+    
+                ## refine path ##
+                refined_path = [path[0]]
+                skipped=False
+                for k in range(0, len(path)-2):
+                    if skipped:
+                        skipped=False
+                        continue
+                    WP1_id = path[k]
+                    WP2_id = path[k+1]
+                    WP3_id = path[k+2]
+                    if geometry_utils.is_valid_path(G_channel, [WP1_id, WP3_id]):
+                        traj12, traj12p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints)
+                        traj23, traj23p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP2_id, WP3_id, waypoints)
+                        traj13, traj13p = geometry_utils.clip_trajectory_between_WPs(trajectory, WP1_id, WP3_id, waypoints)
+                        edge12 = geometry_utils.node_sequence_to_linestring([WP1_id, WP2_id], connections)
+                        edge23 = geometry_utils.node_sequence_to_linestring([WP2_id, WP3_id], connections)
+                        edge13 = geometry_utils.node_sequence_to_linestring([WP1_id, WP3_id], connections)
+                        edge12p = geometry_utils.interpolate_line_to_gdf(edge12, self.crs, n_points=len(traj12p))
+                        edge23p = geometry_utils.interpolate_line_to_gdf(edge23, self.crs, n_points=len(traj23p))
+                        edge13p = geometry_utils.interpolate_line_to_gdf(edge13, self.crs, n_points=len(traj13p))
+                        SSPD12, d12, d21 = geometry_utils.sspd(traj12, traj12p, edge12, edge12p)
+                        SSPD23, d23, d32 = geometry_utils.sspd(traj23, traj23p, edge23, edge23p)
+                        SSPD13, d13, d31 = geometry_utils.sspd(traj13, traj13p, edge13, edge13p)
+                        f123 = np.mean(d12.tolist() + d21.tolist() + d23.tolist() + d32.tolist())
+                        f13 = np.mean(d13.tolist() + d31.tolist())
+                        len123 = edge12.length + edge23.length
+                        len13 = edge13.length
+                        if  f123*len123 > f13*len13:
+                            refined_path.append(WP3_id)
+                            skipped=True
+                            print('skipping ', WP2_id)
+                        else:
+                            refined_path.append(WP2_id)
+                    else:
+                        refined_path.append(WP2_id)
+                if refined_path[-1] != path[-1]:
+                    refined_path.append(path[-1])
+                print(path)
+                print(refined_path)
+                path = refined_path
+                            
+                # Compute GeoDataFrame from path, containing the edge sequence as LineStrings
+                path_df = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                for j in range(0, len(path)-1):
+                    #print(path[j], path[j+1])
+                    edge = connections[(connections['from'] == path[j]) & (connections['to'] == path[j+1])].geometry.item()
+                    temp = pd.DataFrame([[mmsi, path[j], path[j+1], edge, message]], columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
+                    path_df = pd.concat([path_df, temp])
+                path_df = gpd.GeoDataFrame(path_df, geometry='geometry', crs=self.crs)
+        
+                ###########
+                # evaluate goodness of fit
+                ###########
+                if idx_orig >= idx_dest:  # In some cases this is needed, for example for roundtrips of ferries
+                    idx_orig = 0
+                    idx_dest = -1
+                eval_points = points.iloc[idx_orig:idx_dest]  # the subset of points we are evaluating against
+                multi_line = MultiLineString(list(path_df['geometry']))
+                edge_sequence = ops.linemerge(multi_line)  # merge edge sequence to a single linestring
+                # compute the fraction of trajectory that can be associated with an edge sequence
+                t1 = points.index[idx_orig]
+                t2 = points.index[idx_dest]
+                try:
+                    eval_traj = trajectory.get_linestring_between(t1, t2)
+                    percentage_covered = eval_traj.length / trajectory.get_length()
+                except:
+                    eval_traj = trajectory
+                    percentage_covered = 1
+                num_points = len(eval_points)
+                interpolated_points = [edge_sequence.interpolate(dist) for dist in range(0, int(edge_sequence.length)+1, int(edge_sequence.length/num_points)+1)]
+                interpolated_points_coords = [Point(point.x, point.y) for point in interpolated_points]  # interpolated points on edge sequence
+                interpolated_points = pd.DataFrame({'geometry': interpolated_points_coords})
+                interpolated_points = gpd.GeoDataFrame(interpolated_points, geometry='geometry', crs=self.crs)    
+                SSPD, d12, d21 = geometry_utils.sspd(eval_traj, eval_points['geometry'], edge_sequence, interpolated_points['geometry'])
+                distances = d12.tolist() + d21.tolist()
+                evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                   'SSPD':SSPD,
+                                                   'distances':[distances],
+                                                   'fraction_covered':percentage_covered,
+                                                   'message':message,
+                                                   'path':[path],
+                                                   'path_linestring':edge_sequence}
+                                                 )
+               
+            except:
+                message = 'no_path'
+                path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+                evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                                   'SSPD':np.nan,
+                                                   'distances':[np.nan],
+                                                   'fraction_covered':0,
+                                                   'message':message,
+                                                   'path':[np.nan],
+                                                   'path_linestring':np.nan}
+                                                 )
+            
+        
+        # When there are no intersections with any waypoints, we cannot map the trajectory to an edge sequence
+        else:
+            #print('Not enough intersections found. Cannot map trajectory to graph...')
+            message = 'no_intersects'
+            #print(mmsi, ': failure')
+            path_df = pd.DataFrame({'mmsi':mmsi, 'orig':orig_WP, 'dest':dest_WP, 'geometry':[], 'message':message})
+            evaluation_results = pd.DataFrame({'mmsi':mmsi,
+                                               'SSPD':np.nan,
+                                               'distances':[np.nan],
+                                               'fraction_covered':0,
+                                               'message':message,
+                                               'path':[np.nan],
+                                               'path_linestring':np.nan}
+                                             )
+        return path_df, evaluation_results

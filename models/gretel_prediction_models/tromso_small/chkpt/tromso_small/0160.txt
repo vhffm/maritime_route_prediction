@@ -1,9 +1,0 @@
-| Metric               |     Value |
-|----------------------|-----------|
-| target_probability   |  0.162812 |
-| choice_accuracy      |  0.571631 |
-| choice_accuracy_deg3 |  0.476518 |
-| precision_top1       |  0.227273 |
-| precision_top5       |  0.374126 |
-| path_nll             | 42.275    |
-| path_nll_deg3        | 40.0052   |

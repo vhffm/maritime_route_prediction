@@ -322,28 +322,31 @@ class GretelPathPrediction:
         Returns:
         predictions: dictionary of paths and their predicted probabilities
         '''
-        # predict n_walks paths from start_node
-        predicted_paths = self.sample_paths(start_nodes, n_walks, max_path_length)
-        sums_dict, flag = self.return_valid_paths(predicted_paths, start_nodes, end_node, n_walks)
-        while (n_walks < 10000) & (flag == False):
-            n_walks = n_walks*2
-            #print(f'No path was found. Retrying with more random walks {n_walks}')
-            predicted_paths = self.sample_paths(start_nodes, n_walks)
+        try:
+            # predict n_walks paths from start_node
+            predicted_paths = self.sample_paths(start_nodes, n_walks, max_path_length)
             sums_dict, flag = self.return_valid_paths(predicted_paths, start_nodes, end_node, n_walks)
-        # only retain the desired number of predicted alternatives
-        if n_predictions == -1:
-            predictions = heapq.nlargest(len(sums_dict), sums_dict.items(), key=lambda x: x[1])
-        else:
-            predictions = heapq.nlargest(np.min([len(sums_dict), n_predictions]), sums_dict.items(), key=lambda x: x[1])
-        
-        # convert to dictionary and sort
-        predictions = dict(predictions)
-        sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
-        # normalize observed predictions, to get probabilities
-        total_sum = sum(sums_dict.values())
-        normalized_sorted_predictions = {key: value / total_sum for key, value in sorted_predictions.items()}
-
-        return normalized_sorted_predictions, flag
+            while (n_walks < 10000) & (flag == False):
+                n_walks = n_walks*2
+                #print(f'No path was found. Retrying with more random walks {n_walks}')
+                predicted_paths = self.sample_paths(start_nodes, n_walks)
+                sums_dict, flag = self.return_valid_paths(predicted_paths, start_nodes, end_node, n_walks)
+            # only retain the desired number of predicted alternatives
+            if n_predictions == -1:
+                predictions = heapq.nlargest(len(sums_dict), sums_dict.items(), key=lambda x: x[1])
+            else:
+                predictions = heapq.nlargest(np.min([len(sums_dict), n_predictions]), sums_dict.items(), key=lambda x: x[1])
+            
+            # convert to dictionary and sort
+            predictions = dict(predictions)
+            sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
+            # normalize observed predictions, to get probabilities
+            total_sum = sum(sums_dict.values())
+            normalized_sorted_predictions = {key: value / total_sum for key, value in sorted_predictions.items()}
+    
+            return normalized_sorted_predictions, flag
+        except:
+            return [], False
 
     def return_valid_paths(self, predicted_paths, start_node, end_node, n_walks):
         sums_dict = {}

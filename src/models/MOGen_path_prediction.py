@@ -25,6 +25,7 @@ class MOGenPathPrediction:
     def __init__(self):
         self.model = []
         self.type = 'MOGen'
+        self.optimal_order = 0
 
     def train(self, paths, max_order, model_selection=True, training_mode='partial'):
         '''
@@ -64,7 +65,8 @@ class MOGenPathPrediction:
     
         # find best MOGen model
         model.fit()
-    
+
+        self.optimal_order = self.model.optimal_maximum_order
         self.model = model
 
     def sample_paths(self, start_node, n_paths, G, seed=42, verbose=True):
@@ -88,14 +90,14 @@ class MOGenPathPrediction:
         # convert start node format from int list to string tuple (input format for MOGen model)
         start_node_str = tuple(str(node) for node in start_node)
         # make predictions based on start node
-        predictions = self.model.predict(no_of_paths=n_paths, max_order=self.model.max_order, start_node=start_node_str, seed=seed, verbose=verbose)
+        predictions = self.model.predict(no_of_paths=n_paths, max_order=self.optimal_order, start_node=start_node_str, seed=seed, verbose=verbose, paths_per_process=100)
         # sort predictions by frequency of occurrence
         sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
         normalized_predictions_dict={}
         for key, val in sorted_predictions.items():
             node_sequence = tuple(int(x) for x in key)
             normalized_predictions_dict[node_sequence] = val/n_paths  # probability of occurrence
-        
+
         return normalized_predictions_dict
 
     def predict_next_nodes(self, start_node, G, n_steps=1, n_predictions=1, n_walks=100, verbose=True):
@@ -126,7 +128,8 @@ class MOGenPathPrediction:
             if geometry_utils.is_valid_path(G, [x for x in node_sequence]):
                 # if the path is valid, either append it to the dictionary of predictions...
                 if node_sequence not in sums_dict:
-                    sums_dict[node_sequence] = val
+                    if len(node_sequence) >= n_start_nodes+n_steps:
+                        sums_dict[node_sequence] = val
                 # ... or increase its probability
                 else:
                     sums_dict[node_sequence] += val

@@ -25,12 +25,11 @@ class DijkstraPathPrediction:
     def train(self, G, paths):
         '''
         Takes a maritime traffic network and a selection of trajectory paths through that network as input
-        Computes a weight for each edge, based on how many ships travelled along the edge
+        Computes a weight for each edge, based on its length and how many ships travelled along the edge
         '''
         # reset any previously calculated edge weights
         for u, v, data in G.edges(data=True):
             data['weight'] = 0
-            data['inverse_weight'] = 0
         
         for path in paths:
             for i  in range(0, len(path)-1):
@@ -40,13 +39,15 @@ class DijkstraPathPrediction:
         
         for u, v, in G.edges():
             if G[u][v]['weight'] > 0:
-                G[u][v]['inverse_weight'] = 1/G[u][v]['weight'] * G[u][v]['length']
+                G[u][v]['inverse_density'] = 1/G[u][v]['weight'] * G[u][v]['length']
+                G[u][v]['inverse_passages'] = 1/G[u][v]['weight']
             else:
-                G[u][v]['inverse_weight'] = np.inf
+                G[u][v]['inverse_density'] = np.inf
+                G[u][v]['inverse_passages'] = np.inf
         
         self.G = G
 
-    def predict_path(self, orig, dest, weight='inverse_weight'):
+    def predict_path(self, orig, dest, weight='inverse_density'):
         '''
         outputs the shortest path in the network using Dijkstra's algorithm.
         :param orig: int, ID of the start waypoint
@@ -60,7 +61,7 @@ class DijkstraPathPrediction:
             print(f'Nodes {orig} and {dest} are not connected. Exiting...')
             return [], False
 
-    def predict(self, paths, n_start_nodes=1, weight='inverse_weight'):
+    def predict(self, paths, n_start_nodes=1, weight='inverse_density'):
         '''
         Docstring
         '''

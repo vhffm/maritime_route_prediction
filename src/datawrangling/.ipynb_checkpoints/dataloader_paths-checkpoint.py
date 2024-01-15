@@ -37,3 +37,18 @@ def load_path_test_data(path_prefix, network_name, test_dates, selection_start, 
     selection = np.arange(selection_start, selection_end, selection_step)
     test_paths = all_test_data.iloc[selection]
     return test_paths
+
+def split_path_data(paths, length):
+    '''
+    split each path in the list of paths into subpaths of length 'length'
+    '''
+    def create_rows(row, n=2):
+        mmsi, path = row
+        return [(mmsi, path[i:i+n]) for i in range(len(path) - n + 1)]
+    
+    # Create a new DataFrame with consecutive elements
+    subpaths = pd.DataFrame(
+        [item for _, row in paths.iterrows() for item in create_rows(row, length)],
+        columns=['mmsi', 'path']
+    )
+    return  subpaths

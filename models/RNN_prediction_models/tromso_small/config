@@ -6,13 +6,13 @@ data_size = -1
 max_seq_len = 101
 
 [ckpt]
-save_ckpt = True
+save_ckpt = False
 load_ckpt = False
 max_ckpt_to_keep = 100
 compute_ppl = False
 direct_stdout_to_file = False
 samples_per_epoch_in_train = -1
-use_v2_saver = False
+use_v2_saver = True
 
 [model configuration]
 model_type = CSSRNN
@@ -41,7 +41,7 @@ init_scale = 0.03
 opt = rmsprop
 
 [for epoch]
-epoch_count = 1000
+epoch_count = 25
 samples_for_benchmark = 3000
 
 [misc]

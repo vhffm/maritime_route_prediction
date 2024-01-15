@@ -19,10 +19,13 @@ class RNNPathPrediction:
         self.config = None
         self.type = 'RNN'
         self.task = None
-        self.train_metrics = {'target_accuracy':[]}
-        self.test_metrics = {'target_accuracy':[]}
+        self.train_metrics = {'max_prediction_acc': [], 'loss': [], 'loss_p': []}
+        self.test_metrics = {'max_prediction_acc': [], 'loss': [], 'loss_p': []}
+        self.valid_metrics = {'max_prediction_acc': [], 'loss': [], 'loss_p': []}
+        self.path_to_model = None
+        self.saver = None
 
-    def train(self, config_file):
+    def train(self, config_file, path_to_model):
         config = Config(config_file)
         self.config = config
         # set log file
@@ -89,7 +92,7 @@ class RNNPathPrediction:
             print("======================valid set========================")
             markov_model.train_and_eval_given_dest(train, valid, 3, 600, use_fast=True)
             input()
-
+        
         # construct model
         with tf.Graph().as_default():
             initializer = tf.random_uniform_initializer(-config.init_scale, config.init_scale)
@@ -109,6 +112,8 @@ class RNNPathPrediction:
             # sv = tf.train.Supervisor(logdir=config.load_path)
             # with sv.managed_session() as sess:
             sess_config = tf.ConfigProto()
+            # initialize saver to save model
+            saver = tf.train.Saver()
             # sess_config.gpu_options.per_process_gpu_memory_fraction = 0.4
             # sess_config.gpu_options.allow_growth = True
             with tf.Session(config=sess_config) as sess:
@@ -160,9 +165,61 @@ class RNNPathPrediction:
 
                 # let's go :)
                 for ep in range(config.epoch_count):
+                    print('Epoch ', ep)
                     if not config.eval_mode:
                         model.train_epoch(sess, train)
-                    model_valid.eval(sess, valid, True, True, model_train=model)
-                    model_test.eval(sess, test, False, False, model_train=model)
-        input()
+                    #cumulative_losses_train = model.eval(sess, train, True, True, model_train=model)
+                    cumulative_losses_valid = model_valid.eval(sess, valid, True, True, model_train=model)
+                    cumulative_losses_test = model_test.eval(sess, test, False, False, model_train=model)
+                    print('_________________________________________________')
+                    #for key, v in cumulative_losses_train.items():
+                    #    self.train_metrics[key].append(v)
+                    for key, v in cumulative_losses_test.items():
+                        self.test_metrics[key].append(v)
+                    for key, v in cumulative_losses_valid.items():
+                        self.valid_metrics[key].append(v)
+                # save model
+                saver.save(sess, path_to_model)
+                
+        #input()
         self.model = model
+        self.saver = saver
+        self.path_to_model = path_to_model
+
+    def plot_train_test_metrics(self, test_val_only=True):
+        '''
+        Plot metrics for training, test and validation set for each epoch
+        '''
+        # Create subplots
+        num_keys = len(self.test_metrics)
+        fig, axes = plt.subplots(ncols=3, figsize=(8, 3))
+        
+        # Loop through each key and create a subplot
+        for i, key in enumerate(self.test_metrics.keys()):
+            if test_val_only==False:
+                train_values = self.train_metrics[key]
+            test_values = self.test_metrics[key]
+            valid_values = self.valid_metrics[key]
+            x = np.arange(len(test_values))
+            
+            # get the axis to plot on
+            ax = axes[i]
+            
+            # plot
+            if test_val_only==False:
+                ax.plot(x, train_values, label='Train', color='b')
+            ax.plot(x, test_values, label='Test', color='r')
+            ax.plot(x, valid_values, label='Test', color='g')
+
+            # set axis limits
+            if key in ['max_prediction_acc']:
+                ax.set_ylim([0,1])
+            
+            # add labels
+            ax.set_xlabel('Epoch')
+            ax.set_ylabel(key)
+            ax.set_title(key)
+            ax.legend()
+        
+        plt.tight_layout()
+        plt.show()

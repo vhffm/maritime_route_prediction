@@ -258,6 +258,32 @@ def sspd(trajectory1, points1, trajectory2, points2):
 
     return SSPD, d12, d21
 
+def signed_distance_to_line(line, point):
+    '''
+    If the point is right of the line, the distance will be negative
+    '''
+    # Check if the input is a LineString and a Point
+    if not isinstance(line, LineString):
+        raise ValueError("The 'line' parameter should be a LineString object.")
+    if not isinstance(point, Point):
+        raise ValueError("The 'point' parameter should be a Point object.")
+
+    # Calculate vectors AB and AP
+    AB = np.array(line.coords[-1]) - np.array(line.coords[0])
+    AP = np.array(point.coords) - np.array(line.coords[0])
+
+    # Calculate the cross product
+    cross_product = np.cross(AB, AP)
+
+    # Determine the sign of the cross product
+    sign = np.sign(cross_product)[0]
+    
+    # Calculate the distance from the point to the line
+    distance = line.distance(point)
+
+    # Return the signed distance
+    return sign * distance
+
 def get_geo_df(path, connections):
     '''
     Converts a sequence of node IDs into a GeoDataFrame containing the route as a list of LineStrings
@@ -290,7 +316,7 @@ def node_sequence_to_linestring(sequence, connections):
     line = ops.linemerge(line)
     return line
 
-def interpolate_line_to_gdf(line, crs, interval=100, n_points=-1):
+def interpolate_line_to_gdf(line, crs, n_points=-1):
     '''
     Interpolates a shapely linestring and returns a GeoDataFrame with the interpolated points
     ====================================
@@ -303,10 +329,11 @@ def interpolate_line_to_gdf(line, crs, interval=100, n_points=-1):
     points_gdf: GeoDataFrame containing the interpolated points in crs format
     '''
     if n_points == -1:
-        n_points = int(line.length / interval)
-        if n_points < 5:
-            n_points = 5
-    points = [line.interpolate(dist) for dist in range(0, int(line.length)+1, n_points)]
+        interval = 100
+    else:
+        interval = int(line.length/n_points)
+    if interval == 0: interval=1
+    points = [line.interpolate(dist) for dist in range(0, int(line.length)+1, interval)]
     points_coords = [Point(point.x, point.y) for point in points]  # interpolated points on edge sequence
     points_df = pd.DataFrame({'geometry': points_coords})
     points_gdf = gpd.GeoDataFrame(points_df, geometry='geometry', crs=crs)

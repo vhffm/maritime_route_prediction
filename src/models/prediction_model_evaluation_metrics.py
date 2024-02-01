@@ -127,10 +127,13 @@ def compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, 
         ground_truth_line = geometry_utils.node_sequence_to_linestring(true_path, connections)
         # interpolate ground truth line
         ground_truth_points = geometry_utils.interpolate_line_to_gdf(ground_truth_line, connections.crs, 100)
-    else:
+    elif eval_mode == 'trajectory':
         # get ground truth trajectory
         trajectory = test_trajectories.get_trajectory(mmsi)
         ground_truth_line, ground_truth_points = geometry_utils.clip_trajectory_between_WPs(trajectory, start_node, end_node, waypoints)
+    else:
+        print('Specify a valid evaluation mode: path or trajectory')
+        return
     
     # build linestring from predicted path
     predicted_line = geometry_utils.node_sequence_to_linestring(predicted_path, connections)

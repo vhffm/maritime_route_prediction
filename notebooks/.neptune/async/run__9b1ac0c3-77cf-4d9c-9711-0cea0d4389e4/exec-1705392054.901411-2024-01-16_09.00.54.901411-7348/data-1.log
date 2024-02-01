@@ -1,0 +1,25 @@
+{"obj": {"type": "AssignString", "path": ["sys", "name"], "value": "Untitled"}, "version": 1}
+{"obj": {"type": "AssignString", "path": ["sys", "description"], "value": ""}, "version": 2}
+{"obj": {"type": "AssignString", "path": ["monitoring", "0160d804", "hostname"], "value": "MacBook-Pro-von-Jan-Hendrik.local"}, "version": 3}
+{"obj": {"type": "AssignString", "path": ["sys", "hostname"], "value": "MacBook-Pro-von-Jan-Hendrik.local"}, "version": 4}
+{"obj": {"type": "AssignString", "path": ["monitoring", "0160d804", "pid"], "value": "7348"}, "version": 5}
+{"obj": {"type": "AssignString", "path": ["monitoring", "0160d804", "tid"], "value": "8079462400"}, "version": 6}
+{"obj": {"type": "AssignBool", "path": ["sys", "failed"], "value": false}, "version": 7}
+{"obj": {"type": "AssignString", "path": ["network_name"], "value": "202204_waypoints_DP10_HDBSCAN13_tromso_full_UTM"}, "version": 8}
+{"obj": {"type": "AssignInt", "path": ["n_points"], "value": 796177}, "version": 9}
+{"obj": {"type": "AssignInt", "path": ["n_nodes"], "value": 541}, "version": 10}
+{"obj": {"type": "AssignInt", "path": ["n_edges"], "value": 2139}, "version": 11}
+{"obj": {"type": "AssignString", "path": ["network_parameters", "Data"], "value": "../../data/processed/202204_points_tromso_cleaned_meta_full_dualSplit_2.parquet"}, "version": 12}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "DP_tolerance"], "value": 10}, "version": 13}
+{"obj": {"type": "AssignString", "path": ["network_parameters", "clustering_method"], "value": "HDBSCAN"}, "version": 14}
+{"obj": {"type": "AssignString", "path": ["network_parameters", "clustering_metric"], "value": "mahalanobis"}, "version": 15}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "clustering_min_samples"], "value": 13}, "version": 16}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "clustering_min_cluster_size"], "value": 13}, "version": 17}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "clustering_eps"], "value": 0}, "version": 18}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "graph_generation_max_distance"], "value": 20}, "version": 19}
+{"obj": {"type": "AssignInt", "path": ["network_parameters", "graph_generation_max_angle"], "value": 45}, "version": 20}
+{"obj": {"type": "AssignFloat", "path": ["network_parameters", "clustering_metric_V_coord"], "value": 1.0}, "version": 21}
+{"obj": {"type": "AssignFloat", "path": ["network_parameters", "clustering_metric_V_cog"], "value": 0.01}, "version": 22}
+{"obj": {"type": "AssignFloat", "path": ["network_parameters", "clustering_metric_V_speed"], "value": 1.0}, "version": 23}
+{"obj": {"type": "AssignString", "path": ["training_data", "training_dates"], "value": "['202205']"}, "version": 24}
+{"obj": {"type": "AssignInt", "path": ["training_data", "n_training_paths"], "value": 1433}, "version": 25}

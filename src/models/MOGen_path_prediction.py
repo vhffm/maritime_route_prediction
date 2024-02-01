@@ -26,6 +26,7 @@ class MOGenPathPrediction:
         self.model = []
         self.type = 'MOGen'
         self.optimal_order = 0
+        self.order = self.optimal_order
 
     def train(self, paths, max_order, model_selection=True, training_mode='partial'):
         '''
@@ -66,7 +67,8 @@ class MOGenPathPrediction:
         # find best MOGen model
         model.fit()
 
-        self.optimal_order = self.model.optimal_maximum_order
+        self.optimal_order = model.optimal_maximum_order
+        self.order = self.optimal_order
         self.model = model
 
     def sample_paths(self, start_node, n_paths, G, seed=42, verbose=True):
@@ -87,10 +89,17 @@ class MOGenPathPrediction:
             print(f'{red_background}Error: Length of the start node sequence ({len(start_node)}) is too long. Maximum order of the prediction model is {self.model.max_order}.')
             print(f'Reduce length of start node sequence or train a higher order model.{reset_style}')
             return
+        
         # convert start node format from int list to string tuple (input format for MOGen model)
         start_node_str = tuple(str(node) for node in start_node)
+        
         # make predictions based on start node
-        predictions = self.model.predict(no_of_paths=n_paths, max_order=self.optimal_order, start_node=start_node_str, seed=seed, verbose=verbose, paths_per_process=100)
+        try:
+            predictions = self.model.predict(no_of_paths=n_paths, max_order=self.order, 
+                                             start_node=start_node_str, seed=seed, verbose=verbose, paths_per_process=100)
+        except:
+            predictions = self.model.predict(no_of_paths=n_paths, max_order=1, 
+                                             start_node=start_node_str, seed=seed, verbose=verbose, paths_per_process=100)
         # sort predictions by frequency of occurrence
         sorted_predictions = dict(sorted(predictions.items(), key=lambda item: item[1], reverse=True))
         normalized_predictions_dict={}
@@ -205,13 +214,17 @@ class MOGenPathPrediction:
                     sums_dict[clipped_node_sequence] += val*n_walks
         return sums_dict, flag                            
 
-    def predict(self, prediction_task, paths, G, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100):
+    def predict(self, prediction_task, paths, G, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100, order=0):
         '''
         Docstring
         '''
         result_list=[]
+
+        # set order of MOGen model. When order=0, we set order to the optimal order determined by MOGen
+        if order > 0:
+            self.order = order
         
-        print(f'Making predictions for {len(paths)} samples')
+        print(f'Making predictions for {len(paths)} samples with MOGen of order {self.order}')
         print(f'Progress:', end=' ', flush=True)
         count = 0  # initialize a counter that keeps track of the progress
         percentage = 0  # percentage of progress

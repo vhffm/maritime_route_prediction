@@ -20,10 +20,11 @@ class RandomWalkPathPrediction:
         self.G = []
         self.type = 'RandomWalk'
 
-    def train(self, G, paths):
+    def train(self, G_in, paths):
         '''
         Takes a maritime traffic network graph as input
         '''
+        G = G_in.copy()
         for u, v, data in G.edges(data=True):
             data['weight'] = 0
             del G.edges[u, v]['geometry']

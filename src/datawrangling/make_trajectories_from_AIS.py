@@ -1,3 +1,7 @@
+'''
+utility functions for processing raw AIS data
+'''
+
 import pandas as pd
 import geopandas as gpd
 import movingpandas as mpd
@@ -12,18 +16,28 @@ print("Movingpandas has version {}".format(mpd.__version__))
 
 def ais_to_trajectory(filename, size, start, save_to):
     '''
-    This script takes raw AIS data as input, cleans and enriches the data and saves it to a parquet file.
+    This function takes raw AIS data as input, cleans and enriches the data and saves it to a parquet file.
     
     Cleaning steps:
     * Drop duplicates (AIS messages can be recorded multiple times by different stations, e.g. satellite, coastal station etc) that have a time difference of < 5 minutes
       Only the first registered message at a certain location is retained
     * The data is split into trajectories, where each trajectory receives a unique ID. 
-      A trajectory is split into sub-trajectories, when the observation gap between AIS messages exceeds 10min and if the resulting
-      sub trajectory is longer than 100m
+      A trajectory is split into sub-trajectories, when:
+          - no AIS message is received for 10 minutes. Only keep trajectories longer than 500m.
+          - a stop longer than 30 seconds is observed (for example ferries). Only keep trajectories longer than 500m.
     * Drop trajectories with 'hops' in the AIS messages (Sometimes the GPS location jumps inexplainably between two consecutive timesteps)
     
     Enrichment with metadata:
     * Ship metadata (width, draught, shiptype, shipgroup, name) is added to the raw AIS data
+    ====================================
+    Params:
+    filename: (string) name of the AIS data file to load
+    size: (int) the number of AIS messages to retain (-1 processes the entire file)
+    start: (int) index of the first message to process
+    save_to: (string) filename to save the processed AIS data to
+    ====================================
+    Returns:
+    
     '''
     
     # read data from file
@@ -98,6 +112,14 @@ def ais_to_trajectory(filename, size, start, save_to):
 def add_ship_metadata(filename, df, join_on='mmsi'):
     '''
     adds ship metadata from specified file to a dataframe
+    ====================================
+    Params:
+    filename: (string) the directory of the metadata file
+    df: (dataframe) dataframe to merge with the metadata
+    join_on: (string) name of the df column to join the metadata on (defaults to 'mmsi')
+    ====================================
+    Returns:
+    df: (dataframe) merged dataframe (including ship metadata)
     '''
     # load ship metadata from file
     df_meta = pd.read_csv(filename, delimiter=';', decimal=',', encoding='ISO-8859-1')
@@ -117,21 +139,5 @@ def add_ship_metadata(filename, df, join_on='mmsi'):
     print(f'Overlap:            {n_matching} MMSIs')
 
     return df
-
-
-def main():
-    print('test')
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--filename')
-    parser.add_argument('--size')
-    parser.add_argument('--start')
-    parser.add_argument('--save_to')
-    args = parser.parse_args()
-    print(args)
-
-    ais_to_trajectory(args.filename, args.size, args.start, args.save_to)
-
-if __name__ == '__main__':
-    main()
         
     

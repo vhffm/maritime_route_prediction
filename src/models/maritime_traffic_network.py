@@ -424,12 +424,12 @@ class MaritimeTrafficNetwork:
         '''
         Refine the traffic graph.
         A list of passages through the graph is given as input.
-        The following action are performed:
+        The following actions are performed:
             * All edges that are not contained in the list of passages are pruned.
             * Edge features are re-computed
                 \ number of passages along each edge
                 \ speed distribution along each edge
-                \ channel width distribution
+                \ cross-track distance distribution along each edge
             
         '''
         start = time.time()  # start timer

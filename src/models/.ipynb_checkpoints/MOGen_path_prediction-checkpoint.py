@@ -21,7 +21,10 @@ sys.path.append('../features')
 import geometry_utils
 
 class MOGenPathPrediction:
-    
+    '''
+    A model for route prediction with or without target information.
+    At the core, the model uses the MOGen path prediction model (pathpy project: https://github.com/pathpy/pathpy).
+    '''
     def __init__(self):
         self.model = []
         self.type = 'MOGen'
@@ -33,11 +36,11 @@ class MOGenPathPrediction:
         Trains a MOGen model based on observed paths in a network
         ====================================
         Params:
-        paths: List of paths, for example: [[2, 3, 4], [1, 7, 9]]
-        max_order: The maximum order of the MOGen model. 
+        paths: (list of lists) List of paths, for example: [[2, 3, 4], [1, 7, 9]]
+        max_order: (int) The maximum order of the MOGen model. 
                    If we want to make predictions specifying a sequence of n start nodes, max_order needs to be at least n.
-        model_selection: If True, then MOGen trains a model up to max_order, including all models < max_order
-                         If False, only a model with max_order is trained
+        model_selection: (bool) If True, then MOGen trains a model up to max_order, including all models < max_order
+                                If False, only a model with max_order is trained
         training_mode: 'full' - model is trained on input paths and sub-paths, e.g. when an input path is [1, 2, 3, 4], the model is trained on
                                 [1, 2, 3, 4], [2, 3, 4], [3, 4]
                        'partial' - model is trained only on actual input paths
@@ -73,15 +76,15 @@ class MOGenPathPrediction:
 
     def sample_paths(self, start_node, n_paths, G, seed=42, verbose=True):
         '''
-        Samples a certain number of paths from a start node
+        Samples a certain number of paths given a start node
         ====================================
         Params:
-        start_node: Single start node or start node sequence, for example: [1], or [1, 2, 3]
-                    Sequence cannot be longer than max_order of the MOGen model
-        n_paths: number of paths to predict
+        start_node: (list of int) Single start node or start node sequence, for example: [1], or [1, 2, 3]
+                                  Sequence cannot be longer than max_order of the MOGen model
+        n_paths: (int) number of paths to sample
         ====================================
         Returns:
-        sorted_predictions: Dictionary of paths and their probability of occurence, sorted by probability (descending)
+        normalized_predictions_dict: (dict) Dictionary of paths and their probability of occurence, sorted by probability (descending)
         '''
         if len(start_node) > self.model.max_order:
             red_background = "\033[48;2;255;200;200m"
@@ -111,18 +114,19 @@ class MOGenPathPrediction:
 
     def predict_next_nodes(self, start_node, G, n_steps=1, n_predictions=1, n_walks=100, verbose=True):
         '''
-        Given a start node or a start node sequence, the model predicts the next node(s)
+        Given a start node or a start node sequence, the model predicts the next node(s) (route prediction without target information)
         ====================================
         Params:
-        start_node: Single start node or start node sequence, for example: [1], or [1, 2, 3]
-                    Sequence cannot be longer than max_order of the MOGen model
-        G: the graph underlying the traffic network (networkx graph object)
-        n_predictions: number of node candidates to predict
-        n_steps: the maximum length of the predicted path ahead (if -1, then we look at path predictions of unlimited length)
+        start_node: (list of int) Single start node or start node sequence, for example: [1], or [1, 2, 3]
+                                  Sequence cannot be longer than max_order of the MOGen model
+        G: (networkx graph object) the graph underlying the traffic network
+        n_steps: (int) the prediction horizon (if -1, we get path predictions of arbitrary length)
+        n_predictions: (int) number of node candidates to predict
         n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction of next node(s)
+        verbose: if True, program flow is printed on screen 
         ====================================
         Returns:
-        predictions: dictionary of nodes sequences and their predicted probabilities
+        sorted_predictions: dictionary of node sequences and their predicted probabilities sorted by the latter
         '''
         # predict n_walks path from start_node
         predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
@@ -157,21 +161,25 @@ class MOGenPathPrediction:
     def predict_path(self, start_node, end_node, G, n_predictions=1, n_walks=100, verbose=True):
         '''
         Given a start node or a start node sequence and an end node, the model predicts likely paths between these
+        (route prediction with target information)
         ====================================
         Params:
-        start_node: node ID(s) of single start node or start node sequence, for example: [1], or [1, 2, 3]
+        start_node: (list of int) node ID(s) of single start node or start node sequence, for example: [1], or [1, 2, 3]
                     Sequence cannot be longer than max_order of the MOGen model
-        end_node: node ID of end node, e.g. 5
-        G: the graph underlying the traffic network (networkx graph object)
-        n_predictions: number of path candidates to predict
-        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction
+        end_node: (int) node ID of end node, e.g. 5
+        G: (networkx graph object) the graph underlying the traffic network
+        n_predictions: (int) number of path candidates to predict
+        n_walks: (int) the number of random walks performed by the MOGen model. The higher this number, the better the prediction
+        verbose: if True, program flow is printed on screen
         ====================================
         Returns:
-        predictions: dictionary of paths and their predicted probabilities
+        normalized_sorted_predictions: dictionary of paths and their predicted probabilities
+        flag: If True, a path from start to destination has been found.
         '''
         # predict n_walks paths from start_node
         predicted_paths = self.sample_paths(start_node, n_walks, G, verbose=verbose)
         sums_dict, flag = self.return_valid_paths(predicted_paths, start_node, end_node, G, n_walks)
+        # if no path was found, retry with more random walks
         while (n_walks < 4000) & (flag == False):
             n_walks = n_walks*2
             #print(f'No path was found. Retrying with more random walks {n_walks}')
@@ -193,6 +201,21 @@ class MOGenPathPrediction:
         return normalized_sorted_predictions, flag
 
     def return_valid_paths(self, predicted_paths, start_node, end_node, G, n_walks):
+        '''
+        Given a start and end node and a set of predicted paths, this method returns only the paths that contain the start and end node
+        ====================================
+        Params:
+        predicted_paths: (dict) a dictionary of path predictions
+        start_node: (list of int) node ID(s) of single start node or start node sequence, for example: [1], or [1, 2, 3]
+                    Sequence cannot be longer than max_order of the MOGen model
+        end_node: (int) node ID of end node, e.g. 5
+        G: (networkx graph object) the graph underlying the traffic network
+        n_walks: (int) the number of random walks performed by the MOGen model. The higher this number, the better the prediction
+        ====================================
+        Returns:
+        sums_dict: (dict) dictionary of paths and their associated probabilities
+        flag: If True, at least one path from start to destination has been found.
+        '''
         sums_dict = {}
         flag = False
         for key, val in predicted_paths.items():
@@ -216,7 +239,24 @@ class MOGenPathPrediction:
 
     def predict(self, prediction_task, paths, G, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100, order=0):
         '''
-        Docstring
+        Method for inference. Given an observed path, predict the entire route from start to destination.
+        ====================================
+        Params:
+        prediction_task: (string) 'next_nodes' for route prediction without destination information
+                                  'path' for route prediction with destination information
+        paths: (Dataframe) the ground truth paths and the vessel mmsi
+               if the entire ground truth path is unknown, specify only the start nodes and optionally the end node, e.g.
+               mmsi     path
+               12345    [5, 30]   (where 5 is the ID of the start node and 30 the ID of the end node)
+        G: (networkx graph object) the graph underlying the traffic network
+        n_start_nodes: (int) number of observed nodes in the path prefix
+        n_steps: (int) prediction horizon
+        n_predictions: (int) number of output predictions. E.g. n_predictions = 3 yields the top 3 predictions based on frequency of occurrence
+        n_walks: (int) number of random walks for sampling
+        order: (int) force the order of the MOGen model for prediction. If 0, the model chooses the optimal order automatically (recommended).
+        ====================================
+        Returns:
+        predictions: (Dataframe) the predicted paths
         '''
         result_list=[]
 

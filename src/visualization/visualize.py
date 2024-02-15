@@ -1,3 +1,7 @@
+'''
+utility functions for visualization
+'''
+
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
@@ -15,12 +19,15 @@ sys.path.append('../features')
 import geometry_utils
 
 def get_bounding_box(gdf):
-    """
-    Function to return a rectangular bounding box for a set of coordinates or trajectories
-    
-    :param gdf: GeoDataFrame with geolocations
-    :return bbox: GeoDataFrame of a rectangular bounding box
-    """
+    '''
+    Function to return a rectangular bounding box for a set of coordinates
+    ====================================
+    Params:
+    gdf: a GeoDataframe
+    ====================================
+    Returns:
+    bbox: GeoDataFrame of a rectangular bounding box
+    '''
     # get the corners of the bounding box
     bounds = gdf.total_bounds
     # create a GeoDataFrame with the corners as coordinates
@@ -38,8 +45,15 @@ def get_bounding_box(gdf):
 
 def traffic_raster_overlay(df, map, overlay_name='tracks'):
     '''
-    creates a hexbin plot as raster overlay from a dataframe
-    returns a folium map object
+    Creates a hexagonally binned density plot as raster overlay from a dataframe
+    ====================================
+    Params:
+    df: a GeoDataframe
+    map: (Folium map object) the map to add the overlay to
+    overlay_name: (string) name of the overlay
+    ====================================
+    Returns:
+    map: (Folium map object) map including traffic raster overlay
     '''
     fig = plt.figure(frameon=False)
     fig.set_size_inches(10, 10)
@@ -85,6 +99,19 @@ def traffic_raster_overlay(df, map, overlay_name='tracks'):
     return map
 
 def map_accurate_and_simplified_trajectory(accurate, simplified, center=[59, 5], columns=['mmsi', 'geometry'], map=None):
+    '''
+    Creates a map of an accurate and a simplified trajectory
+    ====================================
+    Params:
+    accurate: (MovingPandas Trajectory object) the accurate trajectory
+    simplified: (MovingPandas Trajectory object) the simplified trajectory
+    center: [float, float] center of the map
+    columns: (list of strings) columns to plot on the map
+    map: (Folium map object) the map to add the overlay to
+    ====================================
+    Returns:
+    map: (Folium map object) map including an overlay of the two trajectories
+    '''
     if map is None:
         map = folium.Map(location=center, tiles="OpenStreetMap", zoom_start=8)
     map = accurate.to_traj_gdf()[columns].explore(m=map, color='blue', name='Accurate trajectory', 
@@ -98,14 +125,14 @@ def map_prediction_and_ground_truth(predictions, start_node, trajectory, true_pa
     Plots predictions on an interactive map
     ====================================
     Params:
-    predictions: output of self.predict_next_node function
-    start_node: Single start node or start node sequence underlying the prediction
-    trajectory: original trajectory that we want to make predictions for
-    true_path: the actual path in the graph belonging to the original trajectory
+    predictions: (dictionary) output of a prediction model's predict_next_node function
+    start_node: (list of int) Single start node or start node sequence underlying the prediction
+    trajectory: (MovingPandas Trajectory object) original trajectory that we made predictions for
+    true_path: (list of int) the actual path in the graph belonging to the original trajectory
     network: the underlying MaritimeTrafficNetwork object
-    min_passages: only edges are plotted that have at least min_passages as edge feature
-    center: center point of the plotted map
-    opacity: opacity of the waypoints and edges of the maritime traffic network
+    min_passages: (int) only edges are plotted that have at least min_passages as edge feature
+    location: (string) the geographic area name to center plotted map around
+    opacity: (float) opacity of the waypoints and edges of the maritime traffic network to increase readibility
     ====================================
     Returns:
     map: folium map object to display

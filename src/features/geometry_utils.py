@@ -1,3 +1,7 @@
+'''
+Utility functions for processing geo data
+'''
+
 from math import atan2, cos, degrees, pi, radians, sin, sqrt
 import shapely
 import movingpandas as mpd
@@ -16,20 +20,18 @@ from shapely import ops
 
 
 def calculate_initial_compass_bearing(point1, point2):
-    """
-    Calculate the bearing between two points.
-
-    The formulae used is the following:
-        θ = atan2(sin(Δlong).cos(lat2),
-                  cos(lat1).sin(lat2) − sin(lat1).cos(lat2).cos(Δlong))
-    :Parameters:
-      - `point1: shapely Point
-      - `point2: shapely Point
-    :Returns:
-      The bearing in degrees
-    :Returns Type:
-      float
-    """
+    '''
+    Calculate the bearing between two points using the following formula
+    θ = atan2(sin(Δlong).cos(lat2),
+              cos(lat1).sin(lat2) − sin(lat1).cos(lat2).cos(Δlong))
+    ====================================
+    Params:
+    point1: shapely Point (in lon, lat format)
+    point2: shapely Point (in lon, lat format)
+    ====================================
+    Returns:
+    compass_bearing: (float) the bearing in degrees
+    '''
     lat1 = radians(point1.y)
     lat2 = radians(point2.y)
     delta_lon = radians(point2.x - point1.x)
@@ -45,6 +47,16 @@ def calculate_initial_compass_bearing(point1, point2):
     return compass_bearing
 
 def compass_mean(bearings1, bearings2):
+    '''
+    Calculate the mean of two compass bearings
+    ====================================
+    Params:
+    bearings1: (float) compass bearing in degrees
+    bearings2: (float) compass bearing in degrees
+    ====================================
+    Returns:
+    mean_bearing: (float) the mean bearing in degrees
+    '''
     # Convert compass bearings to radians
     rad_bearings1 = np.radians(bearings1)
     rad_bearings2 = np.radians(bearings2)
@@ -63,9 +75,13 @@ def compass_mean(bearings1, bearings2):
 
 def mean_bearing(compass_bearings):
     '''
-    computes the mean of a list of compass bearings in degrees
-    input: list of compass bearings in degrees (0-360)
-    output: mean compass bearing
+    Compute the mean of a list of compass bearings in degrees
+    ====================================
+    Params:
+    compass_bearings: (list of floats) compass bearings in degrees
+    ====================================
+    Returns:
+    mean_bearing: (float) the mean bearing in degrees
     '''
     # Assuming compass_bearings is a numpy array of compass bearings in degrees
     compass_bearings_rad = np.radians(compass_bearings)  # Convert to radians
@@ -82,17 +98,22 @@ def mean_bearing(compass_bearings):
 
 def find_orig_WP(points, waypoints):
     '''
-    Given a trajectory, find the closest waypoint to the start of the trajectory
+    Given a trajectory and a set of waypoints, find the closest waypoint to the start of the trajectory
+    ====================================
+    Params:
+    points: (GeoDataframe) pointwise representation of a trajectory
+    waypoints: (GeoDataframe) waypoints of the maritime traffic network
+    ====================================
+    Returns:
+    orig_WP: (int) ID of the closest waypoint
+    idx_orig: (int) index of the trajectory point closest to orig_WP
+    dist_orig: (float) distance between trajectory and closest waypoint
     '''
     orig = points.iloc[0].geometry  # get trajectory start point
     # find out if trajectory starts in a stop point
     try:
         orig_speed = points.iloc[0:5].speed.mean()
         if orig_speed < 2:
-            #orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
-            #                                             Point(points.iloc[40].lon, points.iloc[40].lat)) # get initial cog
-            #angle = (orig_cog - waypoints.cog_after + 180) % 360 - 180
-            #mask = ((waypoints.speed < 2) & (np.abs(angle) < 45))
             mask = (waypoints.speed < 2)
         else:
             orig_cog = calculate_initial_compass_bearing(Point(points.iloc[0].lon, points.iloc[0].lat), 
@@ -118,6 +139,18 @@ def find_orig_WP(points, waypoints):
     return orig_WP, idx_orig, dist_orig
 
 def find_dest_WP(points, waypoints):
+    '''
+    Given a trajectory and a set of waypoints, find the closest waypoint to the end of the trajectory
+    ====================================
+    Params:
+    points: (GeoDataframe) pointwise representation of a trajectory
+    waypoints: (GeoDataframe) waypoints of the maritime traffic network
+    ====================================
+    Returns:
+    dest_WP: (int) ID of the closest waypoint
+    idx_dest: (int) index of the trajectory point closest to dest_WP
+    dist_dest: (float) distance between trajectory and closest waypoint
+    '''
     dest = points.iloc[-1].geometry  # get end point
     try:
         dest_speed = points.iloc[-5:-1].speed.mean()
@@ -148,8 +181,20 @@ def find_dest_WP(points, waypoints):
 
 def find_WP_intersections(points, trajectory, waypoints, G, channel_width):
     '''
-    given a trajectory, find all waypoint intersections in the correct order
+    Given a trajectory, find all waypoint intersected by the trajectory in consecutive order
+    ====================================
+    Params:
+    points: (GeoDataframe) pointwise representation of a trajectory
+    trajectory: (MovingPandas Trajectory object) a trajectory 
+    waypoints: (GeoDataframe) waypoints of the maritime traffic network
+    G: (networkx graph) the maritime traffic network graph
+    channel_width: (float) the width of the channel around the trajectory, to reduce the graph size for computational efficiency
+    ====================================
+    Returns:
+    cleaned_passages: (list of int) IDs of passed waypoints in consecutive order
+    G_channel: (networkx graph) Subgraph of G that lies in a channel of width channel_width around the trajectory
     '''
+    # criteria for intersection. Values have been determined empirically
     max_distance = 10
     max_angle = 30
     
@@ -223,20 +268,29 @@ def find_WP_intersections(points, trajectory, waypoints, G, channel_width):
     cleaned_passages = list(OrderedDict.fromkeys(cleaned_passages))
     
     return cleaned_passages, G_channel
-
-def distance_points_to_line(points, line):
-    num_points = len(points)
-    # interpolate line
-    interpolated_points = [line.interpolate(dist) for dist in range(0, int(line.length)+1, int(line.length/num_points))]
-    interpolated_points_coords = [(point.x, point.y) for point in interpolated_points]
-    distances = []
-    for p1, p2 in zip(points['geometry'], interpolated_points):
-        distances.append(p1.distance(p2))
-    return distances
+    
 
 def evaluate_edge_sequence(edge_sequence, connections, idx1, idx2, num_points, eval_traj, eval_points):
+    '''
+    Compute the SSPD between an edge sequence and a trajectory
+    ====================================
+    Params:
+    edge_sequence: (list of int) list of waypoint IDs
+    connections: (GeoDataframe) geometric representation of the edges of the maritime traffic network
+    idx1: (int) start index of the trajectory (first point)
+    idx2: (int) end index of the trajectory (last point)
+    num_points: (int) number of trajectory points (for interpolation purposes)
+    eval_traj: (shapely linestring) trajectory to evaluate against
+    eval_points: (GeoDataframe) pointwise representation of the trajectory
+    waypoints: (GeoDataframe) waypoints of the maritime traffic network
+    ====================================
+    Returns:
+    SSPD: (float) the SSPD between edge sequence and trajectory
+    '''
+    # create a geometric object (shapely linestring) from the edge sequence
     line = node_sequence_to_linestring(edge_sequence, connections)
-    # measure distance between the multi_line and the trajectory
+    
+    # measure distance between the edge sequence and the trajectory
     if idx2 == idx1:
         SSPD = eval_points.distance(line)
     else:
@@ -248,7 +302,18 @@ def evaluate_edge_sequence(edge_sequence, connections, idx1, idx2, num_points, e
 
 def sspd(trajectory1, points1, trajectory2, points2):
     '''
-    Symmetrized Segment Path Distance between two linestrings
+    Compute Symmetrized Segment Path Distance between two linestrings
+    ====================================
+    Params:
+    trajectory1: (Shapely linestring) line 1
+    points1: (Shapely points) interpolated points on line 1
+    trajectory2: (Shapely linestring) line 2
+    points2: (Shapely points) interpolated points on line 2
+    ====================================
+    Returns:
+    SSPD: (float) the SSPD between the two lines
+    d12: (list of float) distances between points on line 1 and line 2
+    d21: (list of float) distances between points on line 2 and line 1
     '''
     d12 = points1.distance(trajectory2)
     SPD12 = np.mean(d12)
@@ -260,7 +325,15 @@ def sspd(trajectory1, points1, trajectory2, points2):
 
 def signed_distance_to_line(line, point):
     '''
+    Computes the signed distance between a point and a line.
     If the point is right of the line, the distance will be negative
+    ====================================
+    Params:
+    line: (Shapely linestring) a line
+    point: (Shapely point) a point
+    ====================================
+    Returns:
+    (float) signed distance
     '''
     # Check if the input is a LineString and a Point
     if not isinstance(line, LineString):
@@ -286,7 +359,14 @@ def signed_distance_to_line(line, point):
 
 def get_geo_df(path, connections):
     '''
-    Converts a sequence of node IDs into a GeoDataFrame containing the route as a list of LineStrings
+    Converts a path represented as a sequence of node IDs into a GeoDataFrame containing the route as a list of LineStrings
+    ====================================
+    Params:
+    path: (list of int) list of waypoint IDs
+    connections: (GeoDataframe) geometric representation of the edges of the maritime traffic network
+    ====================================
+    Returns:
+    path_df: (GeoDataframe) the path represented as a GeoDataframe. Each row contains a segment of the path as a linestring
     '''
     path_df = pd.DataFrame(columns=['orig', 'dest', 'geometry'])
     for j in range(0, len(path)-1):
@@ -301,11 +381,11 @@ def node_sequence_to_linestring(sequence, connections):
     Converts a sequence of node IDs into a shapely LineString
     ====================================
     Params:
-    sequence: list of waypoint IDs
+    sequence: (list of int) list of waypoint IDs
     connections: GeoDataFrame containing the connections between waypoints
     ====================================
     Returns:
-    line: edge sequence between waypoints as a single shapely linestring
+    line: (shapely linestring) edge sequence between waypoints
     '''
     line = []
     for j in range(0, len(sequence)-1):
@@ -321,9 +401,9 @@ def interpolate_line_to_gdf(line, crs, n_points=-1):
     Interpolates a shapely linestring and returns a GeoDataFrame with the interpolated points
     ====================================
     Params:
-    line: shapely linestring to be interpolated
-    crs: Coordinate Reference System for GeoDataFrame
-    interval: integer to specify the distance between interpolated points
+    line: (shapely linestring) line to be interpolated
+    crs: (int) Coordinate Reference System for GeoDataFrame
+    interval: (int) the distance between interpolated points
     ====================================
     Returns:
     points_gdf: GeoDataFrame containing the interpolated points in crs format
@@ -345,14 +425,14 @@ def clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints):
     Clips a trajectory to a trajectory segment between two waypoints
     ====================================
     Params:
-    trajectory: MovingPandas trajectory object
-    WP1_id: ID of the first waypoint
-    WP2_id: ID of the second waypoint
-    waypoints: GeoDataFrame containing waypoints
+    trajectory: (MovingPandas trajectory object) the trajectory to clip
+    WP1_id: (int) ID of the first waypoint
+    WP2_id: (int) ID of the second waypoint
+    waypoints: (GeoDataFrame) waypoints of the maritime traffic network
     ====================================
     Returns:
-    clipped_line: Shapely LineString of the clipped trajectory
-    clipped_points: Points on the clipped trajectory as a GeoDataFrame 
+    clipped_line: (Shapely LineString) the clipped trajectory
+    clipped_points: (GeoDataframe) the clipped trajectory represented as a collection of points
     '''
     traj_points = trajectory.to_point_gdf()
     # clip trajectory to the segment between origin and destination waypoint
@@ -373,6 +453,12 @@ def clip_trajectory_between_WPs(trajectory, WP1_id, WP2_id, waypoints):
 
 def is_valid_path(G, path):
     '''
+    Check if a node sequence is a valid path on a graph
+    ====================================
+    Params:
+    path: (list of int) list of node IDs
+    G: (networkx graph) a graph
+    ====================================
     Returns True if path is a valid path on G
     '''
     return all([(path[i],path[i+1]) in G.edges() for i in range(len(path)-1)])
@@ -389,6 +475,14 @@ def split_paths_to_sequences(df, n):
             4781   [1, 2, 3]
             4781   [2, 3, 4]
             4781   [3, 4, 5]
+
+    ====================================
+    Params:
+    df: (dataframe) dataframe of paths
+    n: (int) length of a subpath
+    ====================================
+    Returns:
+    result: (dataframe) a dataframe of paths
     '''
     def create_rows(row, n=2):
         mmsi, path = row

@@ -8,6 +8,7 @@ The raw AIS  data can be downloaded from https://ais-public.kystverket.no/ais-do
 Additional ship metadata can be downloaded from https://data.kystverket.no/dataset/aarlige-seilas
 
 How to use this library:
+- All notebooks except 'RP_Gretel' run in the python environment 'env_geo'. 'RP_Gretel' needs to run in the environment 'env_pyg' 
 - Download AIS data and ship metadata (at least 2 months worth of data for a certain geographical region is recommended)
 - Generate a maritime traffic network (MTN):
   - Run the notebook 'DATA_preprocess_AIS_data' to clean and prepare the raw AIS data for modelling

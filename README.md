@@ -3,6 +3,16 @@ Master Thesis: Graph Analytics for Maritime Route Prediction
 
 This is the code repository for the Master's thesis with the title 'Graph Analytics for Maritime Route Prediction'.
 The aim of this project is to create a Maritime Traffic Network (MTN) from AIS data to model maritime traffic and to facilitate route prediction.
+To get an intuition of what this project is all about, open the demonstration.html file.
+- You will see an interactive map with different layers which you can toggle
+- The maritime traffic network with its waypoints and edges is depicted in red, green and blue color
+- The black line visualizes an observed vessel trajectory
+- The cyan line depicts a part of the trajectory mapped to a path on the graph - the ground truth (partial) route of the vessel in terms of the graph
+- Let's say we observe that the vessel passes a certain waypoint, indicated by the yellow polygon called 'start node'. Can we predict the future route of the vessel, i.e. can we predict the cyan line?
+- Turns out we can: The yellow lines show different predictions for future routes and their associated probabilities (only routes with a probability > 3% are depicted).
+- This is just one example. We can also increase the prediction horizon and look further into the future or predict entire routes if we know the destination.
+
+Note:
 This repository does not come with any raw data. 
 The raw AIS  data can be downloaded from https://ais-public.kystverket.no/ais-download/.
 Additional ship metadata can be downloaded from https://data.kystverket.no/dataset/aarlige-seilas

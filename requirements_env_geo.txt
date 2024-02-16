@@ -108,6 +108,7 @@ gitpython=3.1.40=pyhd8ed1ab_0
 glog=0.6.0=h6da1cb0_0
 gmp=6.2.1=h9f76cd9_0
 gnutls=3.7.8=h9f1a10d_0
+graph-walker=1.0.6=pypi_0
 graphite2=1.3.13=h9f76cd9_1001
 harfbuzz=8.2.1=hf1a6348_0
 hdf4=4.2.15=h8111dcc_6
@@ -116,9 +117,11 @@ holoviews=1.17.1=pyhd8ed1ab_0
 hvplot=0.8.4=pyhd8ed1ab_1
 icu=73.2=hc8870d7_0
 idna=3.4=pyhd8ed1ab_0
+igraph=0.11.3=pypi_0
 importlib-metadata=6.8.0=pyha770c72_0
 importlib_metadata=6.8.0=hd8ed1ab_0
 importlib_resources=6.1.0=pyhd8ed1ab_0
+intervaltree=3.1.0=pypi_0
 ipykernel=6.25.2=pyh1050b4e_0
 ipython=8.16.0=pyh31c8845_0
 ipywidgets=8.1.1=pyhd8ed1ab_0
@@ -156,6 +159,7 @@ krb5=1.21.2=h92f50d5_0
 lame=3.100=h1a8c8d9_1003
 lcms2=2.15=h40e5a24_2
 lerc=4.0.0=h9a09cb3_0
+leuvenmapmatching=1.1.4=pypi_0
 libabseil=20230802.1=cxx17_h13dd4ca_0
 libaec=1.1.1=h13dd4ca_0
 libarchive=3.7.2=h82b9b87_0
@@ -231,6 +235,7 @@ locket=1.0.0=pyhd8ed1ab_0
 lz4-c=1.9.4=hb7217d7_0
 lzo=2.10=h642e427_1000
 mapclassify=2.5.0=pyhd8ed1ab_1
+mappymatch=0.4.1=pypi_0
 markdown=3.4.4=pyhd8ed1ab_0
 markdown-it-py=3.0.0=pyhd8ed1ab_0
 markupsafe=2.1.3=py311heffc1b2_1
@@ -256,7 +261,7 @@ neptune=1.8.2=pyhd8ed1ab_0
 nest-asyncio=1.5.6=pyhd8ed1ab_0
 netcdf4=1.6.4=nompi_py311hbb54521_103
 nettle=3.8.1=h63371fa_1
-networkx=3.1=pyhd8ed1ab_0
+networkx=2.8.8=pypi_0
 notebook=7.0.4=pyhd8ed1ab_0
 notebook-shim=0.2.3=pyhd8ed1ab_0
 nspr=4.35=hb7217d7_0
@@ -269,6 +274,7 @@ openh264=2.3.1=hb7217d7_2
 openjpeg=2.5.0=h4c1507b_3
 openssl=3.1.4=h0d3ecfb_0
 orc=1.9.0=hbfdecac_2
+osmnx=1.8.0=pypi_0
 overrides=7.4.0=pyhd8ed1ab_0
 p11-kit=0.24.1=h29577a5_0
 packaging=23.2=pyhd8ed1ab_0
@@ -279,6 +285,7 @@ panel=1.2.3=pyhd8ed1ab_0
 param=1.13.0=pyh1a96a4e_0
 parso=0.8.3=pyhd8ed1ab_0
 partd=1.4.1=pyhd8ed1ab_0
+pathpy3=3.1.1=pypi_0
 pcre2=10.40=hb34f9b4_0
 pexpect=4.8.0=pyh1a96a4e_2
 pickleshare=0.7.5=py_1003
@@ -287,6 +294,7 @@ pip=23.2.1=pyhd8ed1ab_0
 pixman=0.42.2=h13dd4ca_0
 pkgutil-resolve-name=1.3.10=pyhd8ed1ab_1
 platformdirs=3.10.0=pyhd8ed1ab_0
+polyline=2.0.1=pypi_0
 poppler=23.08.0=h7fbffb0_2
 poppler-data=0.4.12=hd8ed1ab_0
 postgresql=16.0=h00cd704_1
@@ -301,6 +309,7 @@ pugixml=1.13=h13dd4ca_1
 pure_eval=0.2.2=pyhd8ed1ab_0
 py-opencv=4.8.1=py311hf3b2ce4_0
 pyarrow=13.0.0=py311hd7bc329_4_cpu
+pybind11=2.11.1=pypi_0
 pycparser=2.21=pyhd8ed1ab_0
 pyct=0.4.6=py_0
 pyct-core=0.4.6=py_0
@@ -339,17 +348,21 @@ send2trash=1.8.2=pyhd1c38e8_0
 setuptools=68.2.2=pyhd8ed1ab_0
 shapely=2.0.1=py311h7089352_3
 simplejson=3.19.2=py311h05b510d_0
+singledispatchmethod=1.0=pypi_0
 six=1.16.0=pyh6c4a22f_0
 smmap=5.0.0=pyhd8ed1ab_0
 snappy=1.1.10=h17c5cce_0
 sniffio=1.3.0=pyhd8ed1ab_0
+sortedcontainers=2.4.0=pypi_0
 soupsieve=2.5=pyhd8ed1ab_1
+sparse=0.14.0=pyhd8ed1ab_0
 sqlite=3.43.0=h203b68d_0
 stack_data=0.6.2=pyhd8ed1ab_0
 svt-av1=1.7.0=hb765f3a_0
 swagger-spec-validator=3.0.3=pyhd8ed1ab_0
 tbb=2021.10.0=h1995070_1
 terminado=0.17.1=pyhd1c38e8_0
+texttable=1.7.0=pypi_0
 threadpoolctl=3.2.0=pyha21a80b_0
 tiledb=2.16.3=he15c4da_3
 tinycss2=1.2.1=pyhd8ed1ab_0

@@ -29,35 +29,46 @@ import geometry_utils
 
 class MaritimeTrafficNetwork:
     '''
-    DOCSTRING
+    A class for modelling a maritime traffic network (MTN)
+    The network is extracted from a set of trajectories contained in the dataframe gdf according to the following steps:
+    - the method 'calc_significant_points_DP' computes significant turning points from the set of trajectories
+    - the method 'calc_waypoints_clustering' computes waypoints through clustering of significant points
+    - the method 'make_graph_from_waypoints' connects the waypoints and yields a maritime traffic network graph
+    Additional methods allow us to refine the MTN:
+    - the method 'merge_stop_points' merges overlapping waypoints in port areas or anchorages which simplifies the network slightly
+    - the method 'prune_graph' removes edges according to specified criteria to simplify the network
+    - the method 'refine_graph_from_paths' computes useful network features and refines the graph based on a set of observed trajectories
+    We can evaluate the network for its goodness of fit with the following methods:
+    - the methods 'trajectory_to_path_sspd' and 'map_matching' are two alternative algorithms to map observed trajectories to paths on the graph
+    - given the mapped paths, we can compute network evaluation metrics using the method 'evaluate_graph'
     '''
     def __init__(self, gdf, crs):
-        self.gdf = gdf
-        self.crs = crs
-        self.hyperparameters = {}
+        self.gdf = gdf                                # GeoDataframe containing the processed AIS data for MTN generation
+        self.crs = crs                                # Coordinate reference system
+        self.hyperparameters = {}                     # MTN hyperparameters
         self.trajectories = mpd.TrajectoryCollection(self.gdf, traj_id_col='mmsi', obj_id_col='mmsi')
-        self.significant_points_trajectory = []
-        self.significant_points = []
-        self.waypoints = []
-        self.waypoint_connections = []
-        self.waypoint_connections_pruned = []
-        self.waypoint_connections_refined = []
-        self.G = []
-        self.G_pruned = []
-        self.G_refined = []
+        self.significant_points_trajectory = []       # significant turning points, represented as trajectories per vessel
+        self.significant_points = []                  # significant turning points
+        self.waypoints = []                           # MTN waypoints, represented as a GeoDataframe
+        self.waypoint_connections = []                # MTN edges, represented as a GeoDataframe
+        self.waypoint_connections_pruned = []         # pruned MTN edges, represented as a GeoDataframe
+        self.waypoint_connections_refined = []        # refined MTN edges (with additional features), represented as a GeoDataframe
+        self.G = []                                   # MTN represented as a  networkx graph
+        self.G_pruned = []                            # pruned MTN represented as a  networkx graph
+        self.G_refined = []                           # refined MTN represented as a  networkx graph
 
     def get_trajectories_info(self):
+        # print info about underlying trajectories
         print(f'Number of AIS messages: {len(self.gdf)}')
         print(f'Number of trajectories: {len(self.trajectories)}')
         print(f'Coordinate Reference System (CRS): {self.gdf.crs}')
 
     def set_hyperparameters(self, params):
+        # set MTN hyperparameters
         self.hyperparameters = params
     
     def init_precomputed_significant_points(self, gdf):
-        '''
-        Load precomputed significant points
-        '''
+        # Load precomputed significant points from a GeoDataframe
         print('Loading significant turning points from file...')
         self.significant_points = gdf
         self.significant_points_trajectory = mpd.TrajectoryCollection(gdf, traj_id_col='mmsi', obj_id_col='mmsi', t='date_time_utc')
@@ -65,35 +76,41 @@ class MaritimeTrafficNetwork:
         print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
 
     def init_precomputed_waypoints(self, gdf):
-        '''
-        Load precomputed waypoints
-        '''
+        # Load precomputed waypoints from a GeoDataframe
         print('Loading precomputed waypoints from file...')
         self.waypoints = gdf
         print(f'{len(gdf)} waypoints loaded')
     
     def calc_significant_points_DP(self, tolerance):
         '''
-        Detect significant turning points with Douglas Peucker algorithm 
-        and add COG before and after each significant point
-        :param tolerance: Douglas Peucker algorithm tolerance
+        This method detects significant turning points with the Douglas Peucker algorithm 
+        ====================================
+        Params:
+        tolerance: (float) Douglas Peucker algorithm tolerance parameter (for UTM coordinate reference system, the unit is meters)
+        ====================================
         result: self.significant_points_trajectory is set to a MovingPandas TrajectoryCollection containing
                 the significant turning points
                 self.significant_points is set to GeoPandasDataframe containing the significant turning 
                 points and COG information
         '''
-        #
         print(f'Calculating significant turning points with Douglas Peucker algorithm (tolerance = {tolerance}) ...')
         start = time.time()  # start timer
+        
+        # Compute significant points with Douglas Peucker algorithm
         self.significant_points_trajectory = mpd.DouglasPeuckerGeneralizer(self.trajectories).generalize(tolerance=tolerance)
         n_points, n_DP_points = len(self.gdf), len(self.significant_points_trajectory.to_point_gdf())
+        
         end = time.time()  # end timer
         print(f'Number of significant points detected: {n_DP_points} ({n_DP_points/n_points*100:.2f}% of AIS messages)')
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
 
+        # Add course over ground (COG) before and after each turning point
         print(f'Adding course over ground before and after each turn ...')
         start = time.time()  # start timer
+        
         self.significant_points_trajectory.add_direction()
+
+        # Reformat and assign results
         traj_df = self.significant_points_trajectory.to_point_gdf()
         traj_df.rename(columns={'direction': 'cog_before'}, inplace=True)
         traj_df['cog_after'] = np.nan
@@ -112,12 +129,21 @@ class MaritimeTrafficNetwork:
     def calc_waypoints_clustering(self, method='HDBSCAN', min_samples=15, min_cluster_size=15, eps=50, 
                                   metric='euclidean', V=np.diag([1, 1, 0.01, 0.01, 1])):
         '''
-        Compute waypoints by clustering significant turning points
-        :param method: Clustering method (supported: DBSCAN and HDBSCAN)
-        :param min_points: required parameter for DBSCAN and HDBSCAN
-        :param eps: required parameter for DBSCAN
+        This method computes the waypoints of the MTN through clustering of significant turning points
+        ====================================
+        Params: 
+        method: (str) Clustering method (supported: 'DBSCAN', 'HDBSCAN', 'OPTICS')
+        min_points: (int) hyperparameter for DBSCAN and HDBSCAN
+        min_cluster_size: (int) hyperparameter for DBSCAN and HDBSCAN
+        eps: (float) hyperparameter for DBSCAN
+        tolerance: (float) Douglas Peucker algorithm tolerance parameter (for UTM coordinate reference system, the unit is meters)
+        metric: (str) distance metric for clustering (supported: 'euclidean', 'mahalanobis', 'haversine')
+        V: (numpy array) hyperparameter for mahalanobis distance (scaling matrix)
+        ====================================
+        result: self.waypoints is assigned a GeoDataframe containing the extracted clusters including features 
         '''
         start = time.time()  # start timer
+        
         # prepare data for clustering
         significant_points = self.significant_points
         significant_points['x'] = significant_points.geometry.x
@@ -167,7 +193,7 @@ class MaritimeTrafficNetwork:
             print(f'{method} is not a supported clustering method. Exiting waypoint calculation...')
             return
         
-        # compute cluster centroids
+        # compute cluster centroids and additional features for each cluster
         cluster_centroids = pd.DataFrame(columns=['clusterID', 'lat', 'lon', 'x', 'y', 
                                                   'speed', 'cog_before', 'cog_after', 'n_members', 'convex_hull'])
         for i in range(0, max(clustering.labels_)+1):
@@ -213,14 +239,22 @@ class MaritimeTrafficNetwork:
 
     def merge_stop_points(self, max_speed=2):
         '''
-        merges stop points (criterion max_speed) together that intersect with their convex hull
+        Merges stop points together that intersect with their convex hull
+        Stop points are waypoints where the average vessel spped is below the threshold of max_speed
+        ====================================
+        Params:
+        max_speed: (float) Speed threshold (for UTM the unit is m/s)
+        ====================================
         '''
+        # Identify stop points based on average speed
         waypoints = self.waypoints.copy()
         stop_points = waypoints[waypoints['speed'] < max_speed]
         columns = stop_points.columns.tolist()
         columns.append('members')
+        
         merged_stop_points = pd.DataFrame(columns=columns)  # new DataFrame containing the merged stop points
         drop_IDs = []  # list of waypoint IDs that will be dropped, because they were merged
+        
         # iterate over all stop points
         for i in range(0, len(stop_points)):
             current_stop_point = stop_points.iloc[i]
@@ -358,13 +392,18 @@ class MaritimeTrafficNetwork:
     
     def prune_graph(self, min_passages, graph='original'):
         '''
-        Prune the traffic graph. 
-        Criteria:
+        Prune the MTN by removing edges 
         An edge between nodes u and v is removed when
             ... it violates the traffic directions of both waypoints that it connects
             ... it has a weight < min_passages and there is an alternative path between u and v shorter than 5 edges
+        ====================================
+        Params:
+        min_passages: (int) minimum number of passages along an edge required for the edge to be retained
+        graph: (str) 'original' (prunes the original MTN graph) or 'refined' (prunes the refined MTN graph). 
+        ====================================
         '''
         print('Pruning...')
+        # Decide which graph to prune, either the original or the refined graph
         if graph == 'original':
             G_pruned = self.G.copy()
             G_temp = self.G.copy()
@@ -377,7 +416,7 @@ class MaritimeTrafficNetwork:
             print('Specify a valid graph to prune. Either "original" for the original graph or "refined" for the refined graph.')
             return
 
-        edges_to_remove = []
+        edges_to_remove = []  # placeholder for edges that will be removed
         
         # remove all edges that violate the main traffic flow through waypoints
         for u, v in G_pruned.edges():
@@ -411,26 +450,31 @@ class MaritimeTrafficNetwork:
             G_pruned.remove_edge(u, v)
             connections_pruned = connections_pruned[~((connections_pruned['from'] == u) & (connections_pruned['to'] == v))]
 
+        # Output results
         print('------------------------')
         print(f'Pruned Graph:')
         print(f'Number of nodes: {G_pruned.number_of_nodes()} ({nx.number_of_isolates(G_pruned)} isolated)')
         print(f'Number of edges: {G_pruned.number_of_edges()}')
         print('------------------------')
         
+        # Assign results
         self.G_pruned = G_pruned
         self.waypoint_connections_pruned = connections_pruned
 
     def refine_graph_from_paths(self, paths, trajectories):
         '''
-        Refine the traffic graph.
-        A list of passages through the graph is given as input.
+        Refine the traffic graph based on a list of observed trajectories and their respective paths on the graph.
         The following actions are performed:
-            * All edges that are not contained in the list of passages are pruned.
-            * Edge features are re-computed
-                \ number of passages along each edge
-                \ speed distribution along each edge
-                \ cross-track distance distribution along each edge
-            
+        - All edges that are not contained in the list of passages are pruned.
+        - Edge features are re-computed
+            * number of passages along each edge
+            * speed distribution along each edge
+            * cross-track distance distribution along each edge
+        ====================================
+        Params:
+        paths: (Dataframe) observed paths mapped to the MTN
+        trajectories: (MovingPandas TrajectoryCollection object) observed trajectories that were mapped to paths
+        ====================================   
         '''
         start = time.time()  # start timer
         print(f'Refining graph based on {len(paths)} passages...')
@@ -457,6 +501,7 @@ class MaritimeTrafficNetwork:
         percentage = 0  # percentage of progress
         print(f'Computing speeds and cross track distances for each trajectory:')
         print(f'Progress:', end=' ', flush=True)
+        
         # add edge weight for each passage
         for i in range(0, len(paths)):
             mmsi = paths['mmsi'].iloc[i]
@@ -488,7 +533,7 @@ class MaritimeTrafficNetwork:
                     dist = geometry_utils.signed_distance_to_line(edge, traj_points_interp.iloc[k].item())
                     #print(u, v, i, k)
                     #print(traj_points_interp.iloc[k].item(), dist)
-                    cross_dists[u, v, i, k] = dist
+                    cross_dists[u, v, i, k] = dist    # the k-th cross-track distance along the edge u,v observed from the  i-th path
             count += 1
             # report progress
             if count/len(paths) > 0.1:
@@ -497,7 +542,7 @@ class MaritimeTrafficNetwork:
                 print(f'{percentage}%...', end='', flush=True)
         print('Done!')
         
-        edges_to_remove = []        
+        edges_to_remove = []  # placeholder for edges to remove
         
         print(f'Pruning edges and computing edge features...')
         # iterate over all edges
@@ -532,11 +577,6 @@ class MaritimeTrafficNetwork:
                 cross_dist_std = np.std(cross_dist_distribution)
                 cross_dist_skew = skew(cross_dist_distribution)
                 cross_dist_kurtosis = kurtosis(cross_dist_distribution)
-                #cross_dist_std = np.sqrt(np.sum(cross_dist_distribution**2)/len(cross_dist_distribution))  # assuming normal distribution with mean 0
-                #cross_dist_mean = np.sqrt(2/np.pi)*cross_dist_std
-                #loc, scale = halfnorm.fit(cross_dist_distribution, floc=0)
-                #cross_dists_mean = halfnorm.mean(loc=0, scale=scale) 
-                #cross_dists_std = halfnorm.std(loc=0, scale=scale)
                 cross_dist_95_perc_confidence = [cross_dist_mean+1.96*cross_dist_std, 
                                                  cross_dist_mean-1.96*cross_dist_std] # assuming normal distribution
                 G_refined[u][v]['cross_track_dist_mean'] = cross_dist_mean
@@ -557,6 +597,7 @@ class MaritimeTrafficNetwork:
             G_refined.remove_edge(u, v)
             connections_refined = connections_refined[~((connections_refined['from'] == u) & (connections_refined['to'] == v))]
 
+        # Output results
         print('------------------------')
         print(f'Refined Graph:')
         print(f'Number of nodes: {G_refined.number_of_nodes()} / {self.G.number_of_nodes()} ({nx.number_of_isolates(G_refined)} / {nx.number_of_isolates(self.G)} isolated)')
@@ -565,18 +606,25 @@ class MaritimeTrafficNetwork:
         end = time.time()
         print(f'Time elapsed: {(end-start)/60:.2f} minutes')
 
+        # Assign results
         connections_refined = gpd.GeoDataFrame(connections_refined, geometry='geometry', crs=self.crs)
-        
         self.G_refined = G_refined
         self.waypoint_connections_refined = connections_refined
 
     def make_graph_from_waypoints(self, max_distance=10, max_angle=45):
         '''
-        Transform computed waypoints to a weighted, directed graph
-        The nodes of the graph are self.waypoints
-        The edges are calculated by iterating through all trajectories. 
-        Edges are added between waypoints, when the trajectory has at most max_distance to the convex hulls of these waypoints and the difference
-        in direction is at most max_angle
+        Connect computed waypoints based on observed trajectories.
+        A connection is added between waypoints, when 
+        - the trajectory has at most max_distance to the convex hulls of these waypoints and 
+        - the angle between the waypoint traffic direction and the vessel's course is at most max_angle
+        From waypoints and connections, we model a weighted, directed graph, where waypoints are nodes and connections are edges
+        ====================================
+        Params:
+        max_distance: (float) maximum distance between a trajectory and waypoint convex hull
+        max_angle: (float) maximum angle between vessel course and waypoint traffic direction
+        ====================================
+        result: self.waypoint_connections: A GeoDataframe holding the connections between waypoints as geometric objects
+                self.G: The MTN represented as a networkx graph
         '''
         print(f'Constructing maritime traffic network graph from waypoints and trajectories...')
         print(f'Progress:', end=' ', flush=True)
@@ -652,7 +700,7 @@ class MaritimeTrafficNetwork:
         # initialize directed graph from adjacency matrix
         G = nx.from_scipy_sparse_array(A, create_using=nx.DiGraph)
 
-        # add node features
+        # Add node features
         for i in range(0, len(self.waypoints)):
             node_id = self.waypoints.clusterID.iloc[i]
             G.nodes[node_id]['n_members'] = self.waypoints.n_members.iloc[i]
@@ -661,7 +709,7 @@ class MaritimeTrafficNetwork:
             G.nodes[node_id]['cog_before'] = self.waypoints.cog_before.iloc[i]
             G.nodes[node_id]['cog_after'] = self.waypoints.cog_after.iloc[i]
         
-        # Construct a GeoDataFrame from graph edges (for plotting reasons)
+        # Construct a GeoDataFrame from graph edges
         waypoints = self.waypoints.copy()
         waypoints.set_geometry('geometry', inplace=True, crs=self.crs)
         waypoint_connections = pd.DataFrame(columns=['from', 'to', 'geometry', 'direction', 'length', 'passages'])
@@ -689,7 +737,7 @@ class MaritimeTrafficNetwork:
             G[orig][dest]['geometry'] = waypoint_connections['geometry'].iloc[i]
             G[orig][dest]['inverse_weight'] = 1/waypoint_connections['passages'].iloc[i]
        
-        # report and save results
+        # Output results
         print('Done!')
         print('------------------------')
         print(f'Unpruned Graph:')
@@ -697,6 +745,8 @@ class MaritimeTrafficNetwork:
         print(f'Number of edges: {G.number_of_edges()}')
         print(f'Network is (weakly) connected: {nx.is_weakly_connected(G)}')
         print('------------------------')
+        
+        # Assign results
         self.G = G
         self.waypoint_connections = gpd.GeoDataFrame(waypoint_connections, geometry='geometry', crs=self.crs)
         
@@ -705,22 +755,30 @@ class MaritimeTrafficNetwork:
 
     def trajectory_to_path_sspd(self, trajectory, k_max=500, l_max=5, algorithm='standard', verbose=False):
         '''
-        Find the best path along the graph for a given trajectory and evaluate goodness of fit
-        The algorithm contains the following steps:
+        A fast map-matching algorithm to map trajectories to paths.
+        The algorithm maps a trajectory to a path on the graph, trying to minimize the SSPD between trajectory and path according to the following steps:
         1. Find suitable waypoint close to the origin of the trajectory
         2. Find suitable waypoint close to the destination of the trajectory
         3. Find all waypoints passed by the trajectory
         4. Compute the edge sequence between each pair of passed waypoints that minimizes the SSPD to the trajectory
-        :param trajectory: a single MovingPandas Trajectory object
-        returns:
-        :GeoDataFrame path_df: contains the sequence of edges traversed by a vessel which is closest to its original trajectory
-        :DataFrame evaluation_results: contains metrics for the 'goodness of fit'
+        ====================================
+        Params:
+        trajectory: (MovingPandas Trajectory object) a trajectory
+        k_max: (int) algorithm hyperparameter for maximum subpath alternatives
+        l_max: (int) algorithm hyperparameter for maximum subpath length
+        algorithm: (str) 'standard' or 'refined' ('refined' hops over some intermediate waypoints that were visited, but increase the SSPD)
+        ====================================
+        Returns
+        path_df: (GeoDataframe) contains the segments of the mapped path row by row 
+        evaluation_results: (Dataframe) contains evaluation metrics about the mapped path with respect to the original trajectory
         '''
+        # initialize variables
         G = self.G_pruned.copy()
         waypoints = self.waypoints.copy()
         connections = self.waypoint_connections_pruned.copy()
         points = trajectory.to_point_gdf()
         mmsi = points.mmsi.unique()[0]
+        
         #print(mmsi)
         if verbose: 
             print('=======================')
@@ -739,7 +797,8 @@ class MaritimeTrafficNetwork:
             dist_orig = np.inf
             dist_dest = np.inf
 
-        ### GET ALL INTERSECTIONS between trajectory and waypoints and a channel around that trajectory that defines the subgraph
+        # Get all intersections between trajectory and waypoints 
+        # as well as subgraph in a channel around that trajectory
         passages, G_channel = geometry_utils.find_WP_intersections(points, trajectory, waypoints, G, 1000)
         if verbose: print('Intersections found:', passages)
         
@@ -1022,10 +1081,15 @@ class MaritimeTrafficNetwork:
         
     def dijkstra_shortest_path(self, orig, dest, weight='inverse_weight'):
         '''
-        outputs the shortest path in the network using Dijkstra's algorithm.
-        :param orig: int, ID of the start waypoint
-        :param dest: int, ID of the destination waypoint
-        :param weight: string, name of the edge feature to be used as weight in Dijkstra's algorithm
+        Finds the shortest path in the network using Dijkstra's algorithm.
+        ====================================
+        Params:
+        orig: (int) ID of the start waypoint
+        dest: (int) ID of the destination waypoint
+        weight: (str) name of the edge feature to be used as weight in Dijkstra's algorithm
+        ====================================   
+        Returns:
+        dijkstra_path_df: (GeoDataframe) the shortest path between orig and dest
         '''     
         try:
             # compute shortest path using dijsktra's algorithm (outputs a list of nodes)
@@ -1044,11 +1108,23 @@ class MaritimeTrafficNetwork:
             dijkstra_path_df = gpd.GeoDataFrame(dijkstra_path_df, geometry='geometry', crs=self.crs)
             return dijkstra_path_df
     
-    def evaluate_graph(self, trajectories, k_max=500, l_max=5, algorithm='refined'):
+    def evaluate_graph(self, trajectories, k_max=500, l_max=5, algorithm='standard'):
         '''
-        given a selection of trajectories, compute evaluation metrics for the graph
-        input:
-        :MovingPandas TrajectoryCollection: trajectories to evaluate the graph against
+        Given a selection of trajectories, compute and visualize evaluation metrics for the Maritime Traffic Network
+        ====================================
+        Params:
+        trajectories: (MovingPandas TrajectoryCollection) trajectories to evaluate the MTN against
+        k_max: (int) algorithm hyperparameter for maximum subpath alternatives (for trajectory_to_path_sspd algorithm)
+        l_max: (int) algorithm hyperparameter for maximum subpath length (for trajectory_to_path_sspd algorithm)
+        algorithm: (str) 'standard' (uses trajectory_to_path_sspd map matching algorithm) 
+                         'refined' (uses trajectory_to_path_sspd map matching algorithm;'refined' hops over some intermediate waypoints that were visited, but increase the SSPD) 
+                         'leuven' (uses leuven map_matching algorithm)
+        ====================================   
+        Returns:
+        all_paths: (GeoDataframe) all map-matched paths
+        all_evaluation_results: (Dataframe) evaluation metrics
+        summary: (dict) summary of evaluation metrics
+        fig: (matplotlib figure) plot of evaluation metrics
         '''
         # initialize output variables
         all_paths = pd.DataFrame(columns=['mmsi', 'orig', 'dest', 'geometry', 'message'])
@@ -1149,11 +1225,27 @@ class MaritimeTrafficNetwork:
         return all_paths, all_evaluation_results, summary, fig
     
     def map_waypoints(self, detailed_plot=False, center=[59, 5], opacity=1):
+        '''
+        Method for the visualization of waypoints on a folium map object
+        Visualizes waypoints categorized by traffic direction and speed:
+        - Blue: Stop points
+        - Green: Waypoints with eastbound traffic direction
+        - Red: Waypoints with westbound traffic direction
+        ====================================
+        Params:
+        detailed_plot: (bool) if True, all trajectories and significant points are added to the map as vector data (can crash for too many trajectories)
+                              if False, a hexagonally binned plot of the actual traffic density is added as a raster overlay (recommended)
+        center: [float, float] center of the map in lon lat coordinates
+        opacity: (float) opacity of the displayed waypoints
+        ====================================   
+        Returns:
+        map: (Folium map object) map with waypoints as layers
+        '''
         # plotting
         if detailed_plot:
             columns = ['geometry', 'mmsi']  # columns to be plotted
-            # plot simplified trajectories
-            map = self.trajectories.to_traj_gdf()[columns].explore(column='mmsi', name='Simplified trajectories', 
+            # plot trajectories
+            map = self.trajectories.to_traj_gdf()[columns].explore(column='mmsi', name='Trajectories', 
                                                                       style_kwds={'weight':1, 'color':'black', 'opacity':0.5}, 
                                                                       legend=False)
             # plot significant turning points with their cluster ID
@@ -1209,7 +1301,18 @@ class MaritimeTrafficNetwork:
 
     def map_graph(self, pruned=False, refined=False, location='stavanger', min_passages=1, line_weight=1, opacity=1):
         '''
-        Visualization function to map the maritime traffic network graph
+        Method for the visualization of the Maritime Traffic Network on a folium map object
+        ====================================
+        Params:
+        pruned: (bool) if True, the pruned MTN is visualized
+        refined: (bool) if True, the refined MTN is visualized
+        location: (str) the geographic region to center the map around (supported: 'stavanger', 'tromso')
+        min_passages: (int) only edges a minimium of min_passages will be displayed
+        line_weight: (float) line weight for edge display
+        opacity: (float) opacity of the displayed waypoints and edges
+        ====================================   
+        Returns:
+        map: (Folium map object) map with the MTN as layers
         '''
         if location=='stavanger':
             center=[59, 5]
@@ -1217,7 +1320,7 @@ class MaritimeTrafficNetwork:
             center=[69, 19]
         else:
             center=[59, 10.5]
-        # basemap with waypoints and traffic
+        # basemap with waypoints
         map = self.map_waypoints(detailed_plot=False, center=center, opacity=opacity)
 
         # add connections
@@ -1230,6 +1333,7 @@ class MaritimeTrafficNetwork:
             connections = self.waypoint_connections.copy()
         connections = connections[connections['passages'] >= min_passages]
         
+        # Plot connections
         eastbound = connections[(connections.direction < 180)]
         westbound = connections[(connections.direction >= 180)]
         map = westbound.explore(m=map, name='westbound graph edges', legend=False,
@@ -1241,6 +1345,12 @@ class MaritimeTrafficNetwork:
     def plot_graph_canvas(self, pruned=False, refined=False):
         '''
         Plot the maritime traffic network graph on a white canvas
+        ====================================
+        Params:
+        pruned: (bool) if True, the pruned MTN is visualized
+        refined: (bool) if True, the refined MTN is visualized
+        ====================================   
+        Returns:
         '''
         if pruned == True:
             G = self.G_pruned
@@ -1279,16 +1389,15 @@ class MaritimeTrafficNetwork:
 
     def map_matching(self, trajectory, verbose=False):
         '''
-        Find the best path along the graph for a given trajectory using leuven map matching and evaluate goodness of fit
-        The algorithm contains the following steps:
-        1. Find suitable waypoint close to the origin of the trajectory
-        2. Find suitable waypoint close to the destination of the trajectory
-        3. Find all waypoints passed by the trajectory
-        4. Compute the edge sequence between each pair of passed waypoints that minimizes the SSPD to the trajectory
-        :param trajectory: a single MovingPandas Trajectory object
-        returns:
-        :GeoDataFrame path_df: contains the sequence of edges traversed by a vessel which is closest to its original trajectory
-        :DataFrame evaluation_results: contains metrics for the 'goodness of fit'
+        A map-matching algorithm to map trajectories to paths.
+        The algorithm maps a trajectory to a path on the graph, using the Leuven map matching algorithm (https://github.com/wannesm/LeuvenMapMatching)
+        ====================================
+        Params:
+        trajectory: (MovingPandas Trajectory object) a trajectory
+        ====================================
+        Returns
+        path_df: (GeoDataframe) contains the segments of the mapped path row by row 
+        evaluation_results: (Dataframe) contains evaluation metrics about the mapped path with respect to the original trajectory
         '''
         G = self.G_pruned.copy()
         waypoints = self.waypoints.copy()

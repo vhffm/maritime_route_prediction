@@ -25,7 +25,10 @@ import warnings
 warnings.filterwarnings('ignore')
 
 class GretelPathPrediction:
-
+    '''
+    A model for route prediction with or without target information.
+    At the core, the model uses the GRETEL path prediction model (https://github.com/jbcdnr/gretel-path-extrapolation).
+    '''
     def __init__(self):
         self.model = None
         self.graph = None
@@ -50,6 +53,8 @@ class GretelPathPrediction:
                         - lengths.txt, observations.txt & paths.txt : contain path data
                         for more details on these files, check the notebook M4_data_format_for_gretel.ipynb
         task: the prediction task the model is trained for (e.g. 'start-to-end' or 'next-node')
+        ====================================
+        Returns
         '''
         self.task = task
         # load configuration from file
@@ -205,9 +210,10 @@ class GretelPathPrediction:
         Samples a certain number of paths from a start node
         ====================================
         Params:
-        start_node: Single start node 
-        n_samples: number of samples to predict
-        max_path_length: maximum length of the path to be predicted (# of subsequent nodes)
+        start_nodes: (list of int) observed start nodes 
+        n_samples: (int) number of samples to predict
+        n_walks: (int) number of random walks for sampling
+        max_path_length: (int) maximum length of the path to be predicted (# of subsequent nodes)
         ====================================
         Returns:
         normalized_samples: Dictionary of paths and their probability of occurence, sorted by probability (descending)
@@ -270,15 +276,14 @@ class GretelPathPrediction:
         Given a start node or a start node sequence, the model predicts the next node(s)
         ====================================
         Params:
-        start_node: Single start node or start node sequence, for example: [1], or [1, 2, 3]
-                    Sequence cannot be longer than max_order of the MOGen model
-        G: the graph underlying the traffic network (networkx graph object)
-        n_predictions: number of node candidates to predict
-        n_steps: the maximum length of the predicted path ahead
-        n_walks: the number of random walks performed by the MOGen model. The higher this number, the better the prediction of next node(s)
+        start_node: (list of int) Single start node or start node sequence, for example: [1], or [1, 2, 3]
+        G: (networkx graph object) the graph underlying the traffic network
+        n_predictions: (int) number of node candidates to predict
+        n_steps: (int) prediction horizon
+        n_walks: (int) the number of random walks for sampling. The higher this number, the better the prediction of next node(s)
         ====================================
         Returns:
-        predictions: dictionary of nodes sequences and their predicted probabilities
+        sorted_predictions: dictionary of nodes sequences and their predicted probabilities
         '''
         if n_steps < 1:
             print('Number of steps n_steps needs to be > 0. Setting n_steps to 100.')
@@ -314,13 +319,15 @@ class GretelPathPrediction:
         Given a start node and an end node, the model predicts likely paths between these
         ====================================
         Params:
-        start_node: node ID of single start node, e.g. 1
-        end_node: node ID of end node, e.g. 5
-        n_predictions: number of path candidates to predict
-        n_walks: the number of random walks performed by the model. The higher this number, the better the prediction
+        start_node: (list of int) Single start node or start node sequence, for example: [1], or [1, 2, 3]
+        end_node: (int) node ID of end node, e.g. 5
+        max_path_length: (int) maximum length of the path to be predicted (# of subsequent nodes)
+        n_predictions: (int) number of path candidates to predict
+        n_walks: (int) the number of random walks performed by the model. The higher this number, the better the prediction
         ====================================
         Returns:
-        predictions: dictionary of paths and their predicted probabilities
+        normalized_sorted_predictions: dictionary of paths and their predicted probabilities
+        flag: True if at least one path has been found between origin and destination
         '''
         try:
             # predict n_walks paths from start_node
@@ -347,8 +354,23 @@ class GretelPathPrediction:
             return normalized_sorted_predictions, flag
         except:
             return [], False
+            
 
     def return_valid_paths(self, predicted_paths, start_node, end_node, n_walks):
+        '''
+        Given a start and end node and a set of predicted paths, this method returns only the paths that contain the start and end node
+        ====================================
+        Params:
+        predicted_paths: (dict) a dictionary of path predictions
+        start_node: (list of int) node ID(s) of single start node or start node sequence, for example: [1], or [1, 2, 3]
+                    Sequence cannot be longer than max_order of the MOGen model
+        end_node: (int) node ID of end node, e.g. 5
+        n_walks: (int) the number of random walks performed by the MOGen model. The higher this number, the better the prediction
+        ====================================
+        Returns:
+        sums_dict: (dict) dictionary of paths and their associated probabilities
+        flag: If True, at least one path from start to destination has been found.
+        '''
         sums_dict = {}
         flag = False
         for key, val in predicted_paths.items():
@@ -371,6 +393,11 @@ class GretelPathPrediction:
     def plot_train_test_metrics(self, test_only=False):
         '''
         Plot metrics for training and test set for each epoch
+        ====================================
+        Params:
+        test_only: If True, only plot metrics of the test set
+        ====================================
+        Returns:
         '''
         # Create subplots
         num_keys = len(self.test_metrics)
@@ -408,7 +435,23 @@ class GretelPathPrediction:
 
     def predict(self, prediction_task, paths, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100, max_path_length=150):
         '''
-        Given a prediction task, this method returns a prediction based on an input dataset
+        Method for inference. Given an observed path, predict the a future route depending on the prediction task
+        ====================================
+        Params:
+        prediction_task: (string) 'next_nodes' for route prediction without destination information
+                                  'path' for route prediction with destination information
+        paths: (Dataframe) the ground truth paths and the vessel mmsi
+               if the entire ground truth path is unknown, specify only the start nodes and optionally the end node, e.g.
+               mmsi     path
+               12345    [5, 30]   (where 5 is the ID of the start node and 30 the ID of the end node)
+        n_start_nodes: (int) number of observed nodes in the path prefix
+        n_steps: (int) prediction horizon
+        n_predictions: (int) number of output predictions. E.g. n_predictions = 3 yields the top 3 predictions based on frequency of occurrence
+        n_walks: (int) number of random walks for sampling
+        max_path_length: (int) maximum length of the path to be predicted (# of subsequent nodes)
+        ====================================
+        Returns:
+        predictions: (Dataframe) the predicted paths
         '''
         result_list=[]
         
@@ -423,6 +466,7 @@ class GretelPathPrediction:
             start_node = path[0:n_start_nodes]
             end_node = path[-1]
            
+            # predict entire route (destination information is available)
             if prediction_task == 'path':
                 prediction, flag = self.predict_path(start_node, end_node, max_path_length=max_path_length, 
                                                      n_predictions=n_predictions, n_walks=n_walks)
@@ -435,6 +479,7 @@ class GretelPathPrediction:
                     predicted_path = []
                     result_list.append({'mmsi': mmsi, 'ground_truth': tuple(path), 'prediction': predicted_path, 'probability':np.nan})
             
+            # predict next nodes (destination information is not available)
             elif prediction_task == 'next_nodes':
                 prediction = self.predict_next_nodes(start_node, n_steps=n_steps, n_predictions=n_predictions, n_walks=n_walks)
                 for key, value in prediction.items():
@@ -454,5 +499,5 @@ class GretelPathPrediction:
                     
         print('Done!')
         
-        result_df = pd.DataFrame(result_list) 
-        return result_df
+        predictions = pd.DataFrame(result_list) 
+        return predictions

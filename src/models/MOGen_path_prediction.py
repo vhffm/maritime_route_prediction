@@ -239,7 +239,7 @@ class MOGenPathPrediction:
 
     def predict(self, prediction_task, paths, G, n_start_nodes=1, n_steps=1, n_predictions=1, n_walks=100, order=0):
         '''
-        Method for inference. Given an observed path, predict the entire route from start to destination.
+        Method for inference. Given an observed path, predict the a future route depending on the prediction task.
         ====================================
         Params:
         prediction_task: (string) 'next_nodes' for route prediction without destination information

@@ -178,10 +178,10 @@ def map_prediction_and_ground_truth(predictions, start_node, trajectory, true_pa
     trajectory = trajectory.to_line_gdf()
     mmsi = trajectory['mmsi'].unique()
 
-    map = trajectory[['mmsi', 'geometry', 'skipsgruppe', 'length', 'bredde']].explore(m=map, style_kwds={'weight':3, 'color':'black', 'opacity':1},
-                                                                                      name=f'{mmsi} trajectory')
+    map = trajectory[['geometry', 'skipsgruppe', 'length', 'bredde']].explore(m=map, style_kwds={'weight':3, 'color':'black', 'opacity':1},
+                                                                                      name=f'ground truth trajectory')
     map = true_path_line.explore(m=map, style_kwds={'weight':3, 'color':'cyan', 'opacity':1},
-                               name=f'{mmsi} closest path')
+                               name=f'mapped ground truth path')
     for i in range (0, len(predicted_paths)):
         map = predicted_paths.iloc[[i,i]].explore(m=map, style_kwds={'weight':3, 'color':'yellow', 'opacity':1},
                                               name=f'Prediction {i} ({predicted_paths["probability"].iloc[i]*100}% probability)')

@@ -81,8 +81,8 @@ def evaluate_given_predictions(prediction_task, path_df, test_trajectories, netw
                      
         # Prediction task: next node(s)         
         elif prediction_task == 'next_nodes':
-            end_node = predicted_path[-1]
             true_path = true_path[0:n_start_nodes+n_steps]
+            end_node = true_path[-1]
             if predicted_path == true_path:
                 SSPD, distances = 0, [0]
                 choice_accuracy = 1.0
@@ -148,7 +148,7 @@ def compute_sspd(eval_mode, true_path, predicted_path, test_trajectories, mmsi, 
     mmsi: (str) the MMSI associated with the predicted vessel trajectory
     connections: (GeoDataframe) the edges of the MTN represented as geometric objects
     start_node: (int) the last node of the observed path prefix
-    end_node: (int) the last node of the predicted path
+    end_node: (int) the last node of the true path
     waypoints: (GeoDataframe) the nodes of the MTN represented as geometric objects
     ====================================
     Returns:

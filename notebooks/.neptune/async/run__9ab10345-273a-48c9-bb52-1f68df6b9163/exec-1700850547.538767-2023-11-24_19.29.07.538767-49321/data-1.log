@@ -1,7 +1,0 @@
-{"obj": {"type": "AssignString", "path": ["sys", "name"], "value": "Untitled"}, "version": 1}
-{"obj": {"type": "AssignString", "path": ["sys", "description"], "value": ""}, "version": 2}
-{"obj": {"type": "AssignString", "path": ["monitoring", "8be6633f", "hostname"], "value": "MacBook-Pro-von-Jan-Hendrik.local"}, "version": 3}
-{"obj": {"type": "AssignString", "path": ["sys", "hostname"], "value": "MacBook-Pro-von-Jan-Hendrik.local"}, "version": 4}
-{"obj": {"type": "AssignString", "path": ["monitoring", "8be6633f", "pid"], "value": "49321"}, "version": 5}
-{"obj": {"type": "AssignString", "path": ["monitoring", "8be6633f", "tid"], "value": "8383422592"}, "version": 6}
-{"obj": {"type": "AssignBool", "path": ["sys", "failed"], "value": false}, "version": 7}

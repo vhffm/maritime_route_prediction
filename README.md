@@ -1,4 +1,37 @@
 # maritime_route_prediction
+
+## Preliminaries
+
+This will setup a `conda` environment for generating images and constructing the networks.
+
+```
+conda create --name jhw_mtn_geo python=3.11
+conda activate jhw_mtn_geo
+mamba install --channel conda-forge --channel defaults --file requirements_env_geo.txt
+```
+
+Note that there are some dependencies that can only be installed via PyPI, cf.
+
+```
+$ cat requirements_env_geo.txt | grep pypi
+#graph-walker=1.0.6=pypi_0
+#igraph=0.11.3=pypi_0
+#intervaltree=3.1.0=pypi_0
+#jupyter-dashboards=0.7.0=pypi_0
+#leuvenmapmatching=1.1.4=pypi_0
+#mappymatch=0.4.1=pypi_0
+#networkx=2.8.8=pypi_0
+#osmnx=1.8.0=pypi_0
+#pathpy3=3.1.1=pypi_0
+#polyline=2.0.1=pypi_0
+#pybind11=2.11.1=pypi_0
+#singledispatchmethod=1.0=pypi_0
+#sortedcontainers=2.4.0=pypi_0
+#texttable=1.7.0=pypi_0
+```
+
+## Instructions
+
 Master Thesis: Graph Analytics for Maritime Route Prediction
 
 This is the code repository for the Master's thesis with the title 'Graph Analytics for Maritime Route Prediction'.
